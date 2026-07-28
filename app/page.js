@@ -51,6 +51,41 @@ const PRODUCT_IMAGES = {
 const formatINR = (n) => n == null || isNaN(Number(n)) ? '—' : '\u20B9' + Number(n).toLocaleString('en-IN');
 const api = (p, o) => fetch('/api' + p, o).then(r => r.json().then(j => ({ ok: r.ok, ...j })));
 
+// ============ BOLIBAZZAR LOGO ============
+function BoliBazzarLogo({ size = 32, showWordmark = false, className = '' }) {
+  return (
+    <div className={`inline-flex items-center gap-2 ${className}`}>
+      <svg width={size} height={size} viewBox="0 0 64 64" fill="none">
+        <defs>
+          <linearGradient id="bbGrad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#4338ca" />
+            <stop offset="55%" stopColor="#e11d48" />
+            <stop offset="100%" stopColor="#f97316" />
+          </linearGradient>
+        </defs>
+        {/* Rounded B block */}
+        <path d="M10 6 h26 a18 18 0 0 1 0 26 h-4 a18 18 0 0 1 0 26 h-22 z" fill="url(#bbGrad)" />
+        {/* Inner cutouts to shape B */}
+        <path d="M22 14 h12 a10 10 0 0 1 0 18 h-12 z M22 34 h16 a10 10 0 0 1 0 18 h-16 z" fill="#0a0a0f" />
+        {/* Shopping cart inside */}
+        <g transform="translate(21 36)" fill="white">
+          <path d="M0 2 h4 l1.5 12 h13 l1.8 -8 h-13.5" stroke="white" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          <circle cx="7" cy="17" r="1.6" />
+          <circle cx="17" cy="17" r="1.6" />
+        </g>
+      </svg>
+      {showWordmark && (
+        <div className="leading-none">
+          <div className="font-bold text-lg tracking-tight">
+            <span className="text-foreground">Boli</span>
+            <span className="bg-gradient-to-r from-fuchsia-500 to-orange-500 bg-clip-text text-transparent">Bazzar</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ============ LOGIN MODAL (lightweight Google-style) ============
 function LoginModal({ open, onOpenChange, onLogin }) {
   const [name, setName] = useState('');
@@ -68,7 +103,7 @@ function LoginModal({ open, onOpenChange, onLogin }) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md bg-background/95 border-white/10">
         <DialogHeader>
-          <DialogTitle className="text-2xl">Sign in to BoliBazaar</DialogTitle>
+          <DialogTitle className="text-2xl">Sign in to BoliBazzar</DialogTitle>
           <DialogDescription>Save your requests, chat with suppliers, and pay securely.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -159,7 +194,7 @@ function SupplierSignupModal({ open, onOpenChange, onDone }) {
             <Input value={f.brand_authorisations} onChange={e => setF({...f, brand_authorisations: e.target.value})} placeholder="Apple, Samsung, Sony, Dell" />
           </div>
         </div>
-        <Button onClick={submit} disabled={loading} className="w-full bg-gradient-to-br from-fuchsia-500 to-violet-600 mt-2">
+        <Button onClick={submit} disabled={loading} className="w-full bg-gradient-to-br from-indigo-600 to-orange-500 mt-2">
           {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileCheck className="w-4 h-4 mr-2" />}Submit for verification
         </Button>
       </DialogContent>
@@ -244,7 +279,7 @@ function ChatSheet({ offer, user, onClose }) {
             const mine = m.sender === 'buyer';
             return (
               <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[80%] rounded-2xl px-3.5 py-2 text-sm ${mine ? 'bg-gradient-to-br from-fuchsia-500 to-violet-600 text-white' : 'bg-white/5 border border-white/10'}`}>
+                <div className={`max-w-[80%] rounded-2xl px-3.5 py-2 text-sm ${mine ? 'bg-gradient-to-br from-indigo-600 to-orange-500 text-white' : 'bg-white/5 border border-white/10'}`}>
                   <div>{m.text}</div>
                   <div className={`text-[10px] mt-1 flex items-center gap-1 ${mine ? 'text-white/70 justify-end' : 'text-muted-foreground'}`}>
                     {new Date(m.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
@@ -289,7 +324,7 @@ function PaymentModal({ offer, user, wallet, tier, onClose, onPaid, onReloadWall
     if (!window.Razorpay) { toast.error('Razorpay script not loaded'); setCreating(false); return; }
     const options = {
       key: r.key_id, amount: r.amount, currency: r.currency, order_id: r.order_id,
-      name: 'BoliBazaar', description: `${offer.supplier_name} · ${formatINR(offer.price_inr)}`,
+      name: 'BoliBazzar', description: `${offer.supplier_name} · ${formatINR(offer.price_inr)}`,
       prefill: { name: user?.name || 'Buyer', email: user?.email || '' },
       theme: { color: '#a21caf' },
       handler: async (resp) => {
@@ -304,7 +339,7 @@ function PaymentModal({ offer, user, wallet, tier, onClose, onPaid, onReloadWall
   }
 
   function shareOnWhatsApp() {
-    const text = `\u{1F389} Just got an amazing deal on BoliBazaar!\n\n${offer.supplier_name}: ${formatINR(offer.price_inr)}\nDelivery: ${offer.delivery_note}\n${offer.extras ? '\u2728 ' + offer.extras + '\n' : ''}\nTry BoliBazaar - India's AI reverse marketplace where suppliers compete for YOUR business:\n${typeof window !== 'undefined' ? window.location.origin : ''}`;
+    const text = `\u{1F389} Just got an amazing deal on BoliBazzar!\n\n${offer.supplier_name}: ${formatINR(offer.price_inr)}\nDelivery: ${offer.delivery_note}\n${offer.extras ? '\u2728 ' + offer.extras + '\n' : ''}\nTry BoliBazzar - India's AI reverse marketplace where suppliers compete for YOUR business:\n${typeof window !== 'undefined' ? window.location.origin : ''}`;
     const url = 'https://wa.me/?text=' + encodeURIComponent(text);
     window.open(url, '_blank');
   }
@@ -330,7 +365,7 @@ function PaymentModal({ offer, user, wallet, tier, onClose, onPaid, onReloadWall
               <div className="flex items-center gap-2">
                 <Wallet className={`w-4 h-4 ${useWallet ? 'text-emerald-400' : 'text-muted-foreground'}`} />
                 <div className="text-left">
-                  <div className="text-sm font-medium">Use BoliBazaar wallet</div>
+                  <div className="text-sm font-medium">Use BoliBazzar wallet</div>
                   <div className="text-xs text-muted-foreground">Balance {formatINR(walletBal)}</div>
                 </div>
               </div>
@@ -342,7 +377,7 @@ function PaymentModal({ offer, user, wallet, tier, onClose, onPaid, onReloadWall
           <div className="flex items-center gap-2 text-xs text-muted-foreground mt-2">
             <Shield className="w-3.5 h-3.5" />Secured by Razorpay · UPI · Cards · Netbanking · Wallets
           </div>
-          <Button onClick={pay} disabled={creating} className="w-full mt-2 bg-gradient-to-br from-fuchsia-500 to-violet-600 h-11">
+          <Button onClick={pay} disabled={creating} className="w-full mt-2 bg-gradient-to-br from-indigo-600 to-orange-500 h-11">
             {creating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CreditCard className="w-4 h-4 mr-2" />}Pay {formatINR(finalAmount)}
           </Button>
         </>)}
@@ -413,23 +448,24 @@ function Hero({ onSubmit, loading }) {
   return (
     <section className="relative overflow-hidden">
       <div className="pointer-events-none absolute inset-0 -z-10">
-        <div className="absolute -top-40 left-1/2 -translate-x-1/2 h-[600px] w-[900px] rounded-full bg-gradient-to-br from-fuchsia-500/30 via-violet-500/20 to-blue-500/20 blur-3xl" />
+        <div className="absolute -top-40 left-1/2 -translate-x-1/2 h-[600px] w-[900px] rounded-full bg-gradient-to-br from-indigo-500/30 via-fuchsia-500/20 to-orange-500/20 blur-3xl" />
         <div className="absolute top-40 -right-20 h-[400px] w-[400px] rounded-full bg-gradient-to-br from-cyan-400/20 to-blue-600/10 blur-3xl" />
       </div>
       <div className="container mx-auto px-6 pt-24 pb-16 md:pt-32 md:pb-24 text-center">
         <Badge variant="outline" className="mb-6 px-4 py-1.5 border-white/20 bg-white/5 backdrop-blur text-sm">
-          <Sparkles className="w-3.5 h-3.5 mr-2 text-fuchsia-400" />India&apos;s first AI Reverse Marketplace
+          <Sparkles className="w-3.5 h-3.5 mr-2 text-orange-400" />India&apos;s first AI Reverse Marketplace
         </Badge>
-        <motion.h1 initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-5xl md:text-7xl font-semibold tracking-tight leading-[1.05] max-w-4xl mx-auto">
-          Tell us what you want to buy.<br />
-          <span className="bg-gradient-to-r from-fuchsia-400 via-violet-400 to-cyan-400 bg-clip-text text-transparent">Sellers compete for your business.</span>
+        <motion.h1 initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-5xl md:text-7xl font-bold tracking-tight leading-[1.05] max-w-4xl mx-auto">
+          <span className="text-foreground">You Ask.</span>{' '}
+          <span className="bg-gradient-to-r from-indigo-500 via-fuchsia-500 to-orange-500 bg-clip-text text-transparent">Sellers Compete.</span>{' '}
+          <span className="text-foreground">You Win.</span>
         </motion.h1>
         <p className="mt-6 text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto">
           No endless scrolling. Speak or type in <span className="text-foreground">English, Hindi, Tamil, Marathi</span> — our AI understands and verified suppliers bid live.
         </p>
         <div className="mt-10 max-w-3xl mx-auto">
           <div className="group relative rounded-3xl bg-white/[0.03] border border-white/10 backdrop-blur-xl shadow-2xl shadow-fuchsia-500/5 p-2">
-            <div className="absolute -inset-px rounded-3xl bg-gradient-to-r from-fuchsia-500/40 via-violet-500/30 to-cyan-500/40 opacity-0 group-focus-within:opacity-100 transition -z-10 blur-md" />
+            <div className="absolute -inset-px rounded-3xl bg-gradient-to-r from-indigo-500/40 via-fuchsia-500/30 to-orange-500/40 opacity-0 group-focus-within:opacity-100 transition -z-10 blur-md" />
             <div className="flex items-start gap-2 p-3">
               <div className="pt-2.5 pl-1 text-fuchsia-400"><Sparkles className="w-5 h-5" /></div>
               <Textarea value={interim ? text + (text ? ' ' : '') + interim : text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (text.trim()) onSubmit(text); } }} placeholder="What would you like to buy today? e.g. iPhone 17 Pro Max 256GB Black under ₹1,20,000..." className="min-h-[64px] resize-none border-0 bg-transparent text-base md:text-lg focus-visible:ring-0 shadow-none placeholder:text-muted-foreground/60" />
@@ -437,7 +473,7 @@ function Hero({ onSubmit, loading }) {
                 <Button onClick={toggleListen} size="lg" variant={listening ? 'default' : 'outline'} className={`h-12 w-12 rounded-2xl p-0 ${listening ? 'bg-red-500 hover:bg-red-600 border-0 animate-pulse' : 'border-white/20 bg-white/5'}`} title={listening ? 'Stop listening' : 'Voice search'}>
                   {listening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
                 </Button>
-                <Button onClick={() => text.trim() && onSubmit(text)} disabled={loading || !text.trim()} size="lg" className="h-12 px-5 rounded-2xl bg-gradient-to-br from-fuchsia-500 to-violet-600 hover:opacity-90 text-white shadow-lg shadow-fuchsia-500/20">
+                <Button onClick={() => text.trim() && onSubmit(text)} disabled={loading || !text.trim()} size="lg" className="h-12 px-5 rounded-2xl bg-gradient-to-br from-indigo-600 to-orange-500 hover:opacity-90 text-white shadow-lg shadow-fuchsia-500/20">
                   {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Send className="w-4 h-4 mr-2" />Ask AI</>}
                 </Button>
               </div>
@@ -501,7 +537,7 @@ function RequirementPreview({ requirement, onConfirm, onCancel, confirming }) {
         </div>
         <div className="flex gap-3 justify-end">
           <Button variant="ghost" onClick={onCancel}>Edit request</Button>
-          <Button onClick={onConfirm} disabled={confirming} className="bg-gradient-to-br from-fuchsia-500 to-violet-600">
+          <Button onClick={onConfirm} disabled={confirming} className="bg-gradient-to-br from-indigo-600 to-orange-500">
             {confirming ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Sending to suppliers...</> : <>Send to suppliers<ArrowRight className="w-4 h-4 ml-2" /></>}
           </Button>
         </div>
@@ -516,7 +552,7 @@ function OfferCard({ offer, onAccept, onChat, onTrack, bestPrice }) {
   const isHighlighted = showAiPick || isCheapest;
   return (
     <motion.div layout initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className={`relative rounded-2xl border p-5 ${isHighlighted ? 'border-fuchsia-500/40 bg-gradient-to-br from-fuchsia-500/[0.06] to-violet-500/[0.03]' : 'border-white/10 bg-white/[0.02]'}`}>
-      {showAiPick && <Badge className="absolute -top-2.5 left-4 bg-gradient-to-r from-fuchsia-500 to-violet-600 border-0"><Sparkles className="w-3 h-3 mr-1" />AI Pick · Best value</Badge>}
+      {showAiPick && <Badge className="absolute -top-2.5 left-4 bg-gradient-to-r from-indigo-600 to-orange-500 border-0"><Sparkles className="w-3 h-3 mr-1" />AI Pick · Best value</Badge>}
       {!showAiPick && isCheapest && <Badge className="absolute -top-2.5 left-4 bg-gradient-to-r from-cyan-500 to-blue-600 border-0"><Award className="w-3 h-3 mr-1" />Lowest price</Badge>}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3">
@@ -570,7 +606,7 @@ function OfferCard({ offer, onAccept, onChat, onTrack, bestPrice }) {
             <Truck className="w-4 h-4 mr-2" />Track delivery
           </Button>
         )}
-        <Button size="sm" disabled={offer.status === 'accepted' || offer.status === 'rejected'} onClick={() => onAccept(offer)} className={showAiPick ? 'bg-gradient-to-br from-fuchsia-500 to-violet-600' : ''}>
+        <Button size="sm" disabled={offer.status === 'accepted' || offer.status === 'rejected'} onClick={() => onAccept(offer)} className={showAiPick ? 'bg-gradient-to-br from-indigo-600 to-orange-500' : ''}>
           {offer.status === 'accepted' ? <><Check className="w-4 h-4 mr-2" />Accepted</> : offer.status === 'rejected' ? 'Closed' : <>Accept & Pay<ArrowRight className="w-4 h-4 ml-2" /></>}
         </Button>
       </div>
@@ -780,7 +816,7 @@ function FeaturedElectronics() {
   );
 }
 function FAQ() {
-  const q = [{q:'How is this different from Amazon or Flipkart?',a:"On BoliBazaar you don't search. Describe what you want, verified suppliers compete to sell it at the best price."},{q:'Is it free for buyers?',a:'Yes. Buyers pay zero platform fees. Suppliers pay a small commission on completed orders only.'},{q:'Are suppliers verified?',a:'Every supplier goes through GST, business, address and brand authorisation checks before joining.'},{q:'Can I negotiate?',a:'Yes — every offer has a built-in chat with the supplier.'},{q:'Which categories are live?',a:'Electronics is live now. Furniture, Cars, Bikes, Home Services and more coming.'}];
+  const q = [{q:'How is this different from Amazon or Flipkart?',a:"On BoliBazzar you don't search. Describe what you want, verified suppliers compete to sell it at the best price."},{q:'Is it free for buyers?',a:'Yes. Buyers pay zero platform fees. Suppliers pay a small commission on completed orders only.'},{q:'Are suppliers verified?',a:'Every supplier goes through GST, business, address and brand authorisation checks before joining.'},{q:'Can I negotiate?',a:'Yes — every offer has a built-in chat with the supplier.'},{q:'Which categories are live?',a:'Electronics is live now. Furniture, Cars, Bikes, Home Services and more coming.'}];
   return (
     <section className="container mx-auto px-6 py-24">
       <div className="max-w-2xl mx-auto">
@@ -792,13 +828,21 @@ function FAQ() {
     </section>
   );
 }
-function Footer() { return (<footer className="border-t border-white/10 mt-16"><div className="container mx-auto px-6 py-10 flex flex-col md:flex-row items-center justify-between gap-4"><div className="flex items-center gap-2"><div className="h-8 w-8 rounded-lg bg-gradient-to-br from-fuchsia-500 to-violet-600 grid place-items-center"><Sparkles className="w-4 h-4" /></div><div className="font-semibold">BoliBazaar</div><span className="text-muted-foreground text-sm">· India\'s AI Reverse Marketplace</span></div><div className="text-xs text-muted-foreground">© 2025 BoliBazaar Technologies · Made for Bharat</div></div></footer>); }
+function Footer() { return (<footer className="border-t border-white/10 mt-16"><div className="container mx-auto px-6 py-10 flex flex-col md:flex-row items-center justify-between gap-4"><div className="flex items-center gap-2"><BoliBazzarLogo size={32} showWordmark /><span className="text-muted-foreground text-sm hidden md:inline">· You Ask. Sellers Compete. You Win.</span></div><div className="text-xs text-muted-foreground">© 2025 BoliBazzar Technologies · Made for Bharat</div></div></footer>); }
 
 function Navbar({ view, setView, user, onLogin, onLogout, onSupplierSignup, wallet, tier }) {
   return (
     <header className="sticky top-0 z-40 backdrop-blur-xl bg-background/60 border-b border-white/5">
       <div className="container mx-auto px-6 h-16 flex items-center justify-between">
-        <button onClick={() => setView('home')} className="flex items-center gap-2"><div className="h-8 w-8 rounded-lg bg-gradient-to-br from-fuchsia-500 to-violet-600 grid place-items-center shadow-lg shadow-fuchsia-500/30"><Sparkles className="w-4 h-4" /></div><div className="font-semibold text-lg tracking-tight">BoliBazaar</div></button>
+        <button onClick={() => setView('home')} className="flex items-center gap-2">
+          <BoliBazzarLogo size={34} />
+          <div className="leading-none">
+            <div className="font-bold text-lg tracking-tight">
+              <span className="text-foreground">Boli</span>
+              <span className="bg-gradient-to-r from-fuchsia-500 to-orange-500 bg-clip-text text-transparent">Bazzar</span>
+            </div>
+          </div>
+        </button>
         <nav className="hidden md:flex items-center gap-1">
           <Button variant={view === 'home' ? 'secondary' : 'ghost'} size="sm" onClick={() => setView('home')}><ShoppingBag className="w-4 h-4 mr-2" />Buy</Button>
           {user && <Button variant={view === 'my_requests' ? 'secondary' : 'ghost'} size="sm" onClick={() => setView('my_requests')}><ClipboardList className="w-4 h-4 mr-2" />My requests</Button>}
@@ -810,7 +854,7 @@ function Navbar({ view, setView, user, onLogin, onLogout, onSupplierSignup, wall
               <Wallet className="w-4 h-4" />{formatINR(wallet.balance_inr)}
             </button>
           )}
-          <Button variant="ghost" size="sm" onClick={onSupplierSignup} className="hidden md:inline-flex"><Building2 className="w-4 h-4 mr-2" />Sell on BoliBazaar</Button>
+          <Button variant="ghost" size="sm" onClick={onSupplierSignup} className="hidden md:inline-flex"><Building2 className="w-4 h-4 mr-2" />Sell on BoliBazzar</Button>
           {user ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -962,7 +1006,7 @@ function ReviewModal({ offer, user, onClose, onSubmitted }) {
         </div>
         <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="Sum it up in one line (optional)" />
         <Textarea value={comment} onChange={e => setComment(e.target.value)} placeholder="Tell other buyers what stood out..." rows={3} />
-        <Button onClick={submit} disabled={saving} className="w-full bg-gradient-to-br from-fuchsia-500 to-violet-600">
+        <Button onClick={submit} disabled={saving} className="w-full bg-gradient-to-br from-indigo-600 to-orange-500">
           {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Star className="w-4 h-4 mr-2" />}Submit review
         </Button>
       </DialogContent>
@@ -981,7 +1025,7 @@ function WalletView({ user, wallet, tier, refresh }) {
     <div className="container mx-auto px-6 py-12 max-w-2xl">
       <Badge variant="outline" className="mb-3"><Wallet className="w-3 h-3 mr-1" />Your wallet</Badge>
       <div className="flex items-center gap-3 flex-wrap">
-        <h1 className="text-4xl font-semibold">BoliBazaar wallet</h1>
+        <h1 className="text-4xl font-semibold">BoliBazzar wallet</h1>
         {tier && <TierBadge tier={tier} />}
       </div>
       <p className="text-muted-foreground mt-2">Earn <span className="text-foreground font-medium">{tier?.cashback_pct || 2}%</span> {tier?.label || 'Silver'} cashback on every purchase. Apply on any future order.</p>
@@ -1120,7 +1164,7 @@ function AutoBidRulesPanel({ email }) {
           <Input value={f.extras} onChange={e => setF({...f, extras: e.target.value})} placeholder="Freebies/extras" className="col-span-2 h-9" />
           <Input value={f.message} onChange={e => setF({...f, message: e.target.value})} placeholder="Auto message to buyer" className="col-span-4 h-9" />
         </div>
-        <Button size="sm" onClick={create} disabled={creating} className="mt-3 bg-gradient-to-br from-fuchsia-500 to-violet-600">
+        <Button size="sm" onClick={create} disabled={creating} className="mt-3 bg-gradient-to-br from-indigo-600 to-orange-500">
           {creating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Bot className="w-4 h-4 mr-2" />}Create auto-bid rule
         </Button>
       </div>

@@ -79,7 +79,7 @@ async function notifyMatchingSuppliers(db, request) {
   const matches = suppliers.filter(s => brands.length === 0 || (s.brand_authorisations || []).length === 0 || (s.brand_authorisations || []).some(b => brands.some(x => x.toLowerCase().includes(b.toLowerCase()) || b.toLowerCase().includes(x.toLowerCase()))));
   const summary = request.requirement.summary || request.requirement.product;
   const link = `${process.env.NEXT_PUBLIC_BASE_URL || ''}/`;
-  const body = `\u{1F514} New buyer request on BoliBazaar!\n\n${summary}\n\nBudget: ${request.requirement.budget_inr ? '\u20B9' + request.requirement.budget_inr.toLocaleString('en-IN') : 'flexible'}\nLocation: ${request.requirement.location || 'India'}\nQty: ${request.requirement.quantity}\n\nOpen dashboard: ${link}`;
+  const body = `\u{1F514} New buyer request on BoliBazzar!\n\n${summary}\n\nBudget: ${request.requirement.budget_inr ? '\u20B9' + request.requirement.budget_inr.toLocaleString('en-IN') : 'flexible'}\nLocation: ${request.requirement.location || 'India'}\nQty: ${request.requirement.quantity}\n\nOpen dashboard: ${link}`;
   const results = [];
   for (const s of matches) {
     if (!s.phone) { results.push({ supplier_id: s.id, business_name: s.business_name, skipped: 'no phone' }); continue; }

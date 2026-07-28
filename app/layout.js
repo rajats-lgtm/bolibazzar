@@ -2,8 +2,8 @@ import './globals.css';
 import { Toaster } from 'sonner';
 
 export const metadata = {
-  title: 'BoliBazaar — India\'s AI Reverse Marketplace',
-  description: 'Tell AI what you want to buy. Verified suppliers compete for your business.',
+  title: 'BoliBazzar — You Ask. Sellers Compete. You Win.',
+  description: 'India\'s AI-powered reverse marketplace. Tell AI what you want to buy — verified suppliers compete for your business.',
 };
 
 export default function RootLayout({ children }) {

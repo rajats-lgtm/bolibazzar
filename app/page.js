@@ -6,7 +6,8 @@ import Script from 'next/script';
 import {
   Sparkles, Send, ShoppingBag, Store, ArrowRight, Check, Star, Truck, Shield, Clock,
   MapPin, TrendingDown, Package, MessageSquare, Loader2, ChevronRight, Award, Percent,
-  Bell, Search, User, LogOut, CreditCard, CheckCircle2, X, FileCheck, Building2, ClipboardList
+  Bell, Search, User, LogOut, CreditCard, CheckCircle2, X, FileCheck, Building2, ClipboardList,
+  Mic, MicOff, Languages, Timer, BarChart3, Trophy, Zap, TrendingUp, Flame
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -343,6 +344,32 @@ function PaymentModal({ offer, user, onClose, onPaid }) {
 // ============ HERO ============
 function Hero({ onSubmit, loading }) {
   const [text, setText] = useState('');
+  const [lang, setLang] = useState('en-IN');
+  const [listening, setListening] = useState(false);
+  const [interim, setInterim] = useState('');
+  const recRef = useRef(null);
+
+  function toggleListen() {
+    const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+    if (!SR) { toast.error('Voice not supported in this browser. Try Chrome or Safari.'); return; }
+    if (listening) { recRef.current?.stop(); return; }
+    const rec = new SR();
+    rec.lang = lang;
+    rec.continuous = false;
+    rec.interimResults = true;
+    rec.onresult = (ev) => {
+      let full = '';
+      for (let i = 0; i < ev.results.length; i++) full += ev.results[i][0].transcript;
+      setInterim(full);
+      if (ev.results[ev.results.length - 1].isFinal) setText(prev => (prev ? prev + ' ' : '') + full);
+    };
+    rec.onend = () => { setListening(false); setInterim(''); };
+    rec.onerror = (e) => { setListening(false); setInterim(''); if (e.error !== 'aborted') toast.error('Voice error: ' + e.error); };
+    recRef.current = rec;
+    rec.start();
+    setListening(true);
+  }
+
   return (
     <section className="relative overflow-hidden">
       <div className="pointer-events-none absolute inset-0 -z-10">
@@ -351,24 +378,38 @@ function Hero({ onSubmit, loading }) {
       </div>
       <div className="container mx-auto px-6 pt-24 pb-16 md:pt-32 md:pb-24 text-center">
         <Badge variant="outline" className="mb-6 px-4 py-1.5 border-white/20 bg-white/5 backdrop-blur text-sm">
-          <Sparkles className="w-3.5 h-3.5 mr-2 text-fuchsia-400" />India\'s first AI Reverse Marketplace
+          <Sparkles className="w-3.5 h-3.5 mr-2 text-fuchsia-400" />India&apos;s first AI Reverse Marketplace
         </Badge>
         <motion.h1 initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-5xl md:text-7xl font-semibold tracking-tight leading-[1.05] max-w-4xl mx-auto">
           Tell us what you want to buy.<br />
           <span className="bg-gradient-to-r from-fuchsia-400 via-violet-400 to-cyan-400 bg-clip-text text-transparent">Sellers compete for your business.</span>
         </motion.h1>
         <p className="mt-6 text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto">
-          No endless scrolling. Just say what you need — our AI understands, verified suppliers bid live, you pick the best offer.
+          No endless scrolling. Speak or type in <span className="text-foreground">English, Hindi, Tamil, Marathi</span> — our AI understands and verified suppliers bid live.
         </p>
         <div className="mt-10 max-w-3xl mx-auto">
           <div className="group relative rounded-3xl bg-white/[0.03] border border-white/10 backdrop-blur-xl shadow-2xl shadow-fuchsia-500/5 p-2">
             <div className="absolute -inset-px rounded-3xl bg-gradient-to-r from-fuchsia-500/40 via-violet-500/30 to-cyan-500/40 opacity-0 group-focus-within:opacity-100 transition -z-10 blur-md" />
             <div className="flex items-start gap-2 p-3">
               <div className="pt-2.5 pl-1 text-fuchsia-400"><Sparkles className="w-5 h-5" /></div>
-              <Textarea value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (text.trim()) onSubmit(text); } }} placeholder="What would you like to buy today? e.g. iPhone 17 Pro Max 256GB Black under ₹1,20,000..." className="min-h-[64px] resize-none border-0 bg-transparent text-base md:text-lg focus-visible:ring-0 shadow-none placeholder:text-muted-foreground/60" />
-              <Button onClick={() => text.trim() && onSubmit(text)} disabled={loading || !text.trim()} size="lg" className="h-12 px-5 rounded-2xl bg-gradient-to-br from-fuchsia-500 to-violet-600 hover:opacity-90 text-white shadow-lg shadow-fuchsia-500/20">
-                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Send className="w-4 h-4 mr-2" />Ask AI</>}
-              </Button>
+              <Textarea value={interim ? text + (text ? ' ' : '') + interim : text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (text.trim()) onSubmit(text); } }} placeholder="What would you like to buy today? e.g. iPhone 17 Pro Max 256GB Black under ₹1,20,000..." className="min-h-[64px] resize-none border-0 bg-transparent text-base md:text-lg focus-visible:ring-0 shadow-none placeholder:text-muted-foreground/60" />
+              <div className="flex flex-col gap-2">
+                <Button onClick={toggleListen} size="lg" variant={listening ? 'default' : 'outline'} className={`h-12 w-12 rounded-2xl p-0 ${listening ? 'bg-red-500 hover:bg-red-600 border-0 animate-pulse' : 'border-white/20 bg-white/5'}`} title={listening ? 'Stop listening' : 'Voice search'}>
+                  {listening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                </Button>
+                <Button onClick={() => text.trim() && onSubmit(text)} disabled={loading || !text.trim()} size="lg" className="h-12 px-5 rounded-2xl bg-gradient-to-br from-fuchsia-500 to-violet-600 hover:opacity-90 text-white shadow-lg shadow-fuchsia-500/20">
+                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Send className="w-4 h-4 mr-2" />Ask AI</>}
+                </Button>
+              </div>
+            </div>
+            <div className="flex items-center justify-between px-3 pb-1 pt-1">
+              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                <Languages className="w-3.5 h-3.5" />
+                {[['en-IN','English'],['hi-IN','हिंदी'],['ta-IN','தமிழ்'],['mr-IN','मराठी'],['bn-IN','বাংলা']].map(([v,l]) => (
+                  <button key={v} onClick={() => setLang(v)} className={`px-2 py-0.5 rounded-full text-xs ${lang === v ? 'bg-fuchsia-500/20 text-fuchsia-200' : 'hover:bg-white/5'}`}>{l}</button>
+                ))}
+              </div>
+              {listening && <div className="text-xs text-red-400 flex items-center gap-1.5"><div className="h-2 w-2 rounded-full bg-red-400 animate-pulse" />Listening...</div>}
             </div>
           </div>
           <div className="mt-4 flex flex-wrap gap-2 justify-center">
@@ -437,7 +478,15 @@ function OfferCard({ offer, onAccept, onChat, bestPrice }) {
           </div>
         </div>
         <div className="text-right">
-          <div className="text-2xl font-bold">{formatINR(offer.price_inr)}</div>
+          <div className="flex items-baseline gap-2 justify-end">
+            {offer.previous_price && offer.previous_price > offer.price_inr && (
+              <span className="text-sm text-red-400 line-through">{formatINR(offer.previous_price)}</span>
+            )}
+            <div className="text-2xl font-bold">{formatINR(offer.price_inr)}</div>
+          </div>
+          {offer.previous_price && offer.previous_price > offer.price_inr && (
+            <div className="text-[10px] text-emerald-400 flex items-center gap-0.5 justify-end"><TrendingDown className="w-3 h-3" />just dropped</div>
+          )}
           <div className="text-xs text-muted-foreground">Valid {offer.validity_hours}h</div>
           {offer.value_score != null && (
             <div className="mt-1 flex items-center gap-1.5 justify-end">
@@ -471,7 +520,135 @@ function OfferCard({ offer, onAccept, onChat, bestPrice }) {
   );
 }
 
-function OffersView({ request, offers, onAccept, onChat, refreshing }) {
+// ============ BIDDING COUNTDOWN ============
+function BiddingCountdown({ requestId, onTick, onDone }) {
+  const [seconds, setSeconds] = useState(60);
+  useEffect(() => {
+    if (seconds <= 0) { onDone(); return; }
+    // tick api every ~12s (drops prices)
+    if (seconds === 60 || seconds === 48 || seconds === 36 || seconds === 24 || seconds === 12) {
+      api(`/requests/${requestId}/tick`, { method: 'POST' }).then(r => { if (r.ok) onTick(r); });
+    }
+    const t = setTimeout(() => setSeconds(s => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [seconds, requestId]);
+  const pct = (seconds / 60) * 100;
+  const hot = seconds < 15;
+  return (
+    <div className={`rounded-2xl border p-4 mb-6 ${hot ? 'border-red-500/40 bg-red-500/5' : 'border-amber-500/30 bg-amber-500/[0.03]'}`}>
+      <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+        <div className="flex items-center gap-3">
+          <div className={`h-9 w-9 rounded-full ${hot ? 'bg-red-500/20 animate-pulse' : 'bg-amber-500/20'} grid place-items-center`}>
+            <Timer className={`w-4.5 h-4.5 ${hot ? 'text-red-400' : 'text-amber-400'}`} />
+          </div>
+          <div>
+            <div className="font-semibold flex items-center gap-2">Live bidding open <Flame className={`w-4 h-4 ${hot ? 'text-red-400 animate-pulse' : 'text-amber-400'}`} /></div>
+            <div className="text-xs text-muted-foreground">Suppliers can drop their prices to win you. Watch offers refresh below.</div>
+          </div>
+        </div>
+        <div className="text-right">
+          <div className={`text-3xl font-bold tabular-nums ${hot ? 'text-red-400' : 'text-amber-300'}`}>{seconds}s</div>
+          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">remaining</div>
+        </div>
+      </div>
+      <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+        <div className={`h-full transition-all duration-1000 ${hot ? 'bg-gradient-to-r from-red-500 to-orange-500' : 'bg-gradient-to-r from-amber-400 to-fuchsia-500'}`} style={{width:`${pct}%`}} />
+      </div>
+    </div>
+  );
+}
+
+function BiddingClosedBanner() {
+  return (
+    <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/[0.04] p-4 mb-6 flex items-center justify-between flex-wrap gap-2">
+      <div className="flex items-center gap-3">
+        <div className="h-9 w-9 rounded-full bg-emerald-500/20 grid place-items-center"><Check className="w-4.5 h-4.5 text-emerald-400" /></div>
+        <div>
+          <div className="font-semibold">Bidding closed · prices locked</div>
+          <div className="text-xs text-muted-foreground">Pick your winning offer below. Suppliers can still chat with you.</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============ SUPPLIER ANALYTICS ============
+function SupplierAnalytics({ email }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [inputEmail, setInputEmail] = useState(email || 'test@apple.in');
+  const [q, setQ] = useState(email || 'test@apple.in');
+
+  useEffect(() => { (async () => { setLoading(true); const r = await api(`/analytics/supplier/${encodeURIComponent(q)}`); setData(r); setLoading(false); })(); }, [q]);
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5 mb-6">
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+        <div className="flex items-center gap-3">
+          <BarChart3 className="w-5 h-5 text-fuchsia-400" />
+          <div>
+            <div className="font-semibold">Your analytics</div>
+            <div className="text-xs text-muted-foreground">Real-time supplier performance</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Input value={inputEmail} onChange={e => setInputEmail(e.target.value)} placeholder="your supplier email" className="w-56 h-9" />
+          <Button size="sm" onClick={() => setQ(inputEmail)}>View</Button>
+        </div>
+      </div>
+      {loading ? <div className="text-muted-foreground text-sm">Loading...</div> : data && (
+        <>
+          {data.supplier ? (
+            <div className="mb-4 text-sm text-muted-foreground">Analytics for <span className="text-foreground font-medium">{data.supplier.business_name}</span> · GST {data.supplier.gst_valid ? 'verified' : 'pending'}</div>
+          ) : (
+            <div className="mb-4 text-sm text-muted-foreground">No supplier registered for this email yet. Register above to start receiving requests.</div>
+          )}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
+            <StatCard icon={<Package className="w-4 h-4 text-cyan-400" />} label="Open requests" value={data.stats.open_requests} sub={`${data.stats.total_requests_available} total`} />
+            <StatCard icon={<Send className="w-4 h-4 text-fuchsia-400" />} label="Offers submitted" value={data.stats.offers_submitted} />
+            <StatCard icon={<Trophy className="w-4 h-4 text-amber-400" />} label="Won" value={data.stats.offers_won} />
+            <StatCard icon={<TrendingUp className="w-4 h-4 text-emerald-400" />} label="Win rate" value={`${data.stats.win_rate_pct}%`} />
+            <StatCard icon={<TrendingDown className="w-4 h-4 text-red-400" />} label="Avg. price gap" value={data.stats.avg_price_gap_pct > 0 ? `+${data.stats.avg_price_gap_pct}%` : '—'} sub="above winner" />
+          </div>
+          <div className="grid md:grid-cols-2 gap-4">
+            <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+              <div className="text-xs uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5"><Flame className="w-3.5 h-3.5 text-orange-400" />Hot buyer cities</div>
+              {data.hot_cities.length === 0 && <div className="text-sm text-muted-foreground">No data yet.</div>}
+              {data.hot_cities.map(c => (
+                <div key={c.city} className="flex items-center justify-between py-1.5 text-sm">
+                  <span className="flex items-center gap-2"><MapPin className="w-3 h-3 text-muted-foreground" />{c.city}</span>
+                  <span className="text-muted-foreground">{c.count} request{c.count > 1 ? 's' : ''}</span>
+                </div>
+              ))}
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+              <div className="text-xs uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5"><Zap className="w-3.5 h-3.5 text-fuchsia-400" />Hot categories</div>
+              {data.hot_categories.length === 0 && <div className="text-sm text-muted-foreground">No data yet.</div>}
+              {data.hot_categories.map(c => (
+                <div key={c.sub_category} className="flex items-center justify-between py-1.5 text-sm capitalize">
+                  <span>{c.sub_category.replace('_', ' ')}</span>
+                  <span className="text-muted-foreground">{c.count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+function StatCard({ icon, label, value, sub }) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">{icon}{label}</div>
+      <div className="text-2xl font-semibold mt-1">{value}</div>
+      {sub && <div className="text-[10px] text-muted-foreground mt-0.5">{sub}</div>}
+    </div>
+  );
+}
+
+function OffersView({ request, offers, onAccept, onChat, refreshing, onTick }) {
+  const [bidClosed, setBidClosed] = useState(request?.status === 'closed');
   const bestPrice = offers.length ? Math.min(...offers.map(o => o.price_inr)) : null;
   return (
     <div className="container mx-auto px-6 py-12">
@@ -490,6 +667,12 @@ function OffersView({ request, offers, onAccept, onChat, refreshing }) {
         </div>
         <div className="text-right"><div className="text-sm text-muted-foreground">Offers received</div><div className="text-3xl font-bold">{offers.length}</div></div>
       </div>
+
+      {!bidClosed && offers.length > 0 && request.status !== 'closed' && (
+        <BiddingCountdown requestId={request.id} onTick={(r) => onTick(r.offers)} onDone={() => setBidClosed(true)} />
+      )}
+      {bidClosed && request.status !== 'closed' && <BiddingClosedBanner />}
+
       {refreshing && !offers.length && (
         <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-12 text-center">
           <div className="inline-flex items-center gap-3 text-lg"><Loader2 className="w-5 h-5 animate-spin text-fuchsia-400" />Notifying verified suppliers...</div>
@@ -617,7 +800,7 @@ function MyRequests({ user, onOpen }) {
   );
 }
 
-function SupplierDashboard({ onSignup }) {
+function SupplierDashboard({ onSignup, user }) {
   const [requests, setRequests] = useState([]); const [loading, setLoading] = useState(true); const [selected, setSelected] = useState(null);
   const [form, setForm] = useState({ supplier_name: 'Croma - Andheri', price_inr: '', delivery_days: '2', delivery_note: 'Next-day delivery', warranty: '1 year manufacturer', rating: '4.6', reviews: '1200', validity_hours: '24', extras: '', message: '' });
   const [submitting, setSubmitting] = useState(false);
@@ -630,6 +813,9 @@ function SupplierDashboard({ onSignup }) {
         <div><Badge variant="outline" className="mb-3"><Store className="w-3 h-3 mr-1" />Supplier dashboard</Badge><h1 className="text-4xl font-semibold">Incoming buyer requests</h1><p className="text-muted-foreground mt-2">Live requirements from verified buyers. Submit your best offer to win.</p></div>
         <Button onClick={onSignup} variant="outline" className="border-fuchsia-500/40"><Building2 className="w-4 h-4 mr-2" />Register your business</Button>
       </div>
+
+      <SupplierAnalytics email={user?.email} />
+
       {loading && <div className="text-muted-foreground">Loading...</div>}
       <div className="grid gap-3">
         {requests.map(r => (
@@ -780,8 +966,8 @@ function App() {
       <Navbar view={view} setView={(v) => { setView(v); if (v === 'home') { setRequest(null); setOffers([]); } }} user={user} onLogin={() => setLoginOpen(true)} onLogout={() => setUser(null)} onSupplierSignup={() => setSupplierSignupOpen(true)} />
 
       {view === 'home' && !request && (<><Hero onSubmit={handleExtract} loading={loading} /><FeaturedElectronics /><HowItWorks /><FAQ /><Footer /></>)}
-      {view === 'offers' && request && (<><OffersView request={request} offers={offers} onAccept={acceptOffer} onChat={setChatOffer} refreshing={refreshing} /><Footer /></>)}
-      {view === 'supplier' && (<><SupplierDashboard onSignup={() => setSupplierSignupOpen(true)} /><Footer /></>)}
+      {view === 'offers' && request && (<><OffersView request={request} offers={offers} onAccept={acceptOffer} onChat={setChatOffer} refreshing={refreshing} onTick={(newOffers) => setOffers(newOffers)} /><Footer /></>)}
+      {view === 'supplier' && (<><SupplierDashboard onSignup={() => setSupplierSignupOpen(true)} user={user} /><Footer /></>)}
       {view === 'my_requests' && user && (<><MyRequests user={user} onOpen={openPastRequest} /><Footer /></>)}
 
       {requirement && <RequirementPreview requirement={requirement} onConfirm={confirmRequirement} onCancel={() => setRequirement(null)} confirming={confirming} />}

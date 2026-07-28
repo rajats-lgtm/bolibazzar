@@ -20,21 +20,29 @@ export async function OPTIONS() { return new NextResponse(null, { status: 204, h
 async function extractRequirement(text) {
   const system = `You are BoliBazaar's AI buying assistant for the Indian electronics market. Extract a structured buying requirement from the user's message. Return STRICT JSON only.
 
+The user may write in English, Hindi, Tamil, Telugu, Bengali, Marathi, Kannada, Malayalam, Gujarati, or a mix (Hinglish/Tanglish). UNDERSTAND ALL and always extract the SAME normalized JSON schema in English keys.
+
 Schema:
 {
   "category": "electronics",
   "sub_category": string (smartphone|laptop|tablet|tv|gaming_console|smartwatch|headphones|camera|accessory|other),
-  "product": string,
+  "product": string (in English),
   "brand": string|null, "model": string|null, "storage": string|null, "ram": string|null,
-  "colour": string|null, "size": string|null,
+  "colour": string|null (in English), "size": string|null,
   "budget_inr": number|null,
-  "location": string|null, "delivery_preference": string|null,
+  "location": string|null (in English/Latin),
+  "delivery_preference": string|null,
   "quantity": number,
   "additional_notes": string|null,
-  "summary": string (one crisp sentence),
+  "summary": string (one crisp sentence, ECHO in the same language the user used),
+  "detected_language": string ("en"|"hi"|"ta"|"te"|"bn"|"mr"|"kn"|"ml"|"gu"|"mixed"),
   "confidence": number 0..1
 }
-Rules: All prices in INR. Convert lakh(=100000), crore(=10000000), k(=1000). quantity defaults 1.`;
+Rules:
+- All prices in INR. Convert lakh/lakhs (=100000), crore (=10000000), k/hazaar (=1000).
+- quantity defaults 1.
+- Hindi numeric words: "bees hazaar"=20000, "ek lakh"=100000, etc.
+- summary should be natural in the user's language e.g. Hindi: "1 lakh 20 hazaar ke andar iPhone 17 Pro Max Mumbai mein"`;
   const resp = await llm.chat.completions.create({
     model: MODEL_EXTRACT,
     messages: [ { role: 'system', content: system }, { role: 'user', content: text } ],
@@ -448,6 +456,103 @@ async function route(req, { params }) {
   if (path === '/whatsapp/log' && method === 'GET') {
     const list = await db.collection('whatsapp_log').find({}, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(20).toArray();
     return ok({ log: list, live: hasWhatsApp() });
+  }
+
+  // --- Bidding: tick to drop prices during 60s auction window ---
+  const tickMatch = path.match(/^\/requests\/([^/]+)\/tick$/);
+  if (tickMatch && method === 'POST') {
+    const id = tickMatch[1];
+    const reqDoc = await db.collection('requests').findOne({ id });
+    if (!reqDoc) return err('request not found', 404);
+    const offers = await db.collection('offers').find({ request_id: id, status: 'pending' }).toArray();
+    if (!offers.length) return ok({ offers: [] });
+    // Randomly pick 1-2 offers to drop their price 1-3%
+    const shuffled = offers.sort(() => Math.random() - 0.5);
+    const dropCount = Math.min(2, shuffled.length);
+    const updated = [];
+    for (let i = 0; i < dropCount; i++) {
+      const o = shuffled[i];
+      const dropPct = 0.01 + Math.random() * 0.02; // 1-3%
+      const newPrice = Math.round((o.price_inr * (1 - dropPct)) / 100) * 100;
+      if (newPrice < o.price_inr) {
+        const scored = computeValueScore({ ...o, price_inr: newPrice }, reqDoc.requirement);
+        await db.collection('offers').updateOne({ id: o.id }, { $set: { price_inr: newPrice, previous_price: o.price_inr, value_score: scored.value_score, rationale: scored.rationale, last_bid_at: new Date().toISOString() } });
+        updated.push({ id: o.id, old_price: o.price_inr, new_price: newPrice });
+      }
+    }
+    // Return all offers freshly, resorted, with new ai_pick
+    const fresh = await db.collection('offers').find({ request_id: id }, { projection: { _id: 0 } }).sort({ value_score: -1, price_inr: 1 }).toArray();
+    fresh.forEach((o, i) => { o.ai_pick = (i === 0); });
+    // Also update the DB to reflect new ai_pick
+    for (const o of fresh) {
+      await db.collection('offers').updateOne({ id: o.id }, { $set: { ai_pick: o.ai_pick } });
+    }
+    return ok({ offers: fresh, dropped: updated });
+  }
+
+  // --- Supplier analytics ---
+  const analyticsMatch = path.match(/^\/analytics\/supplier\/(.+)$/);
+  if (analyticsMatch && method === 'GET') {
+    const email = decodeURIComponent(analyticsMatch[1]);
+    const supplier = await db.collection('suppliers').findOne({ email }, { projection: { _id: 0 } });
+    // Total open + closed requests seen by system
+    const totalReq = await db.collection('requests').countDocuments({});
+    const openReq = await db.collection('requests').countDocuments({ status: 'open' });
+    // Their offers (match by supplier_id if present, else supplier_name contains business_name)
+    let myOfferQuery = {};
+    if (supplier) {
+      myOfferQuery = { $or: [ { supplier_id: supplier.id }, { supplier_name: { $regex: supplier.business_name.split(' ')[0], $options: 'i' } } ] };
+    } else {
+      // No supplier record — return zero stats but include system-wide info
+      myOfferQuery = { supplier_id: '___none___' };
+    }
+    const myOffers = await db.collection('offers').find(myOfferQuery, { projection: { _id: 0 } }).toArray();
+    const won = myOffers.filter(o => o.status === 'accepted');
+    const winRate = myOffers.length ? Math.round(won.length / myOffers.length * 100) : 0;
+    // Avg price gap: for closed requests we didn't win, how far were we from the accepted price
+    const closedReqs = await db.collection('requests').find({ status: 'closed', accepted_offer_id: { $ne: null } }).toArray();
+    let gapSum = 0, gapCount = 0;
+    for (const cr of closedReqs) {
+      const winner = await db.collection('offers').findOne({ id: cr.accepted_offer_id });
+      if (!winner) continue;
+      const myOnThis = myOffers.find(o => o.request_id === cr.id);
+      if (myOnThis && myOnThis.id !== winner.id) {
+        gapSum += (myOnThis.price_inr - winner.price_inr) / winner.price_inr;
+        gapCount++;
+      }
+    }
+    const avgPriceGap = gapCount ? Math.round((gapSum / gapCount) * 10000) / 100 : 0;
+    // Hot cities from all requests
+    const allReqs = await db.collection('requests').find({}).limit(200).toArray();
+    const cityCount = {};
+    for (const r of allReqs) {
+      const c = r.requirement?.location;
+      if (c) cityCount[c] = (cityCount[c] || 0) + 1;
+    }
+    const hotCities = Object.entries(cityCount).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([city, count]) => ({ city, count }));
+    // Category demand
+    const subCatCount = {};
+    for (const r of allReqs) {
+      const s = r.requirement?.sub_category;
+      if (s) subCatCount[s] = (subCatCount[s] || 0) + 1;
+    }
+    const hotCategories = Object.entries(subCatCount).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([sub_category, count]) => ({ sub_category, count }));
+    // Recent activity
+    const recent = myOffers.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')).slice(0, 5);
+    return ok({
+      supplier: supplier || null,
+      stats: {
+        total_requests_available: totalReq,
+        open_requests: openReq,
+        offers_submitted: myOffers.length,
+        offers_won: won.length,
+        win_rate_pct: winRate,
+        avg_price_gap_pct: avgPriceGap,
+      },
+      hot_cities: hotCities,
+      hot_categories: hotCategories,
+      recent_offers: recent,
+    });
   }
 
   return err('route not found: ' + method + ' ' + path, 404);

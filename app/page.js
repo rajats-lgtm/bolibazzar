@@ -417,10 +417,13 @@ function RequirementPreview({ requirement, onConfirm, onCancel, confirming }) {
 }
 
 function OfferCard({ offer, onAccept, onChat, bestPrice }) {
-  const isBest = offer.price_inr === bestPrice;
+  const showAiPick = offer.ai_pick === true;
+  const isCheapest = offer.price_inr === bestPrice;
+  const isHighlighted = showAiPick || isCheapest;
   return (
-    <motion.div layout initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className={`relative rounded-2xl border p-5 ${isBest ? 'border-fuchsia-500/40 bg-gradient-to-br from-fuchsia-500/[0.06] to-violet-500/[0.03]' : 'border-white/10 bg-white/[0.02]'}`}>
-      {isBest && <Badge className="absolute -top-2.5 left-4 bg-gradient-to-r from-fuchsia-500 to-violet-600 border-0"><Award className="w-3 h-3 mr-1" />Best value</Badge>}
+    <motion.div layout initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className={`relative rounded-2xl border p-5 ${isHighlighted ? 'border-fuchsia-500/40 bg-gradient-to-br from-fuchsia-500/[0.06] to-violet-500/[0.03]' : 'border-white/10 bg-white/[0.02]'}`}>
+      {showAiPick && <Badge className="absolute -top-2.5 left-4 bg-gradient-to-r from-fuchsia-500 to-violet-600 border-0"><Sparkles className="w-3 h-3 mr-1" />AI Pick · Best value</Badge>}
+      {!showAiPick && isCheapest && <Badge className="absolute -top-2.5 left-4 bg-gradient-to-r from-cyan-500 to-blue-600 border-0"><Award className="w-3 h-3 mr-1" />Lowest price</Badge>}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3">
           <Avatar className="h-11 w-11 bg-gradient-to-br from-fuchsia-500/20 to-cyan-500/20 border border-white/10"><AvatarFallback className="bg-transparent font-semibold">{offer.supplier_name.slice(0,2).toUpperCase()}</AvatarFallback></Avatar>
@@ -433,8 +436,24 @@ function OfferCard({ offer, onAccept, onChat, bestPrice }) {
             </div>
           </div>
         </div>
-        <div className="text-right"><div className="text-2xl font-bold">{formatINR(offer.price_inr)}</div><div className="text-xs text-muted-foreground">Valid {offer.validity_hours}h</div></div>
+        <div className="text-right">
+          <div className="text-2xl font-bold">{formatINR(offer.price_inr)}</div>
+          <div className="text-xs text-muted-foreground">Valid {offer.validity_hours}h</div>
+          {offer.value_score != null && (
+            <div className="mt-1 flex items-center gap-1.5 justify-end">
+              <div className="h-1.5 w-16 rounded-full bg-white/10 overflow-hidden"><div className="h-full bg-gradient-to-r from-fuchsia-500 to-cyan-400" style={{width:`${offer.value_score}%`}} /></div>
+              <span className="text-[10px] text-muted-foreground">AI {offer.value_score}</span>
+            </div>
+          )}
+        </div>
       </div>
+      {offer.rationale && (
+        <div className="mt-3 flex items-center gap-2 text-xs flex-wrap">
+          <Sparkles className="w-3.5 h-3.5 text-fuchsia-400 shrink-0" />
+          <span className="text-muted-foreground">Why AI ranks this:</span>
+          <span className="text-foreground/90">{offer.rationale}</span>
+        </div>
+      )}
       <div className="mt-4 grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
         <div className="flex items-center gap-2"><Truck className="w-4 h-4 text-cyan-400" />{offer.delivery_note}</div>
         <div className="flex items-center gap-2"><Shield className="w-4 h-4 text-emerald-400" />{offer.warranty}</div>
@@ -444,7 +463,7 @@ function OfferCard({ offer, onAccept, onChat, bestPrice }) {
       {offer.message && <div className="mt-3 text-sm text-muted-foreground italic">"{offer.message}"</div>}
       <div className="mt-4 flex gap-2 justify-end">
         <Button variant="ghost" size="sm" onClick={() => onChat(offer)}><MessageSquare className="w-4 h-4 mr-2" />Chat</Button>
-        <Button size="sm" disabled={offer.status === 'accepted' || offer.status === 'rejected'} onClick={() => onAccept(offer)} className={isBest ? 'bg-gradient-to-br from-fuchsia-500 to-violet-600' : ''}>
+        <Button size="sm" disabled={offer.status === 'accepted' || offer.status === 'rejected'} onClick={() => onAccept(offer)} className={showAiPick ? 'bg-gradient-to-br from-fuchsia-500 to-violet-600' : ''}>
           {offer.status === 'accepted' ? <><Check className="w-4 h-4 mr-2" />Accepted</> : offer.status === 'rejected' ? 'Closed' : <>Accept & Pay<ArrowRight className="w-4 h-4 ml-2" /></>}
         </Button>
       </div>
@@ -653,6 +672,52 @@ function SupplierDashboard({ onSignup }) {
   );
 }
 
+// ============ REVIEW MODAL ============
+function ReviewModal({ offer, user, onClose, onSubmitted }) {
+  const [rating, setRating] = useState(5);
+  const [hover, setHover] = useState(0);
+  const [title, setTitle] = useState('');
+  const [comment, setComment] = useState('');
+  const [tags, setTags] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const TAG_OPTS = ['Fast delivery', 'Great price', 'Perfect packaging', 'Genuine product', 'Helpful supplier', 'Would buy again'];
+  function toggleTag(t) { setTags(p => p.includes(t) ? p.filter(x => x !== t) : [...p, t]); }
+  async function submit() {
+    setSaving(true);
+    const r = await api('/reviews', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ offer_id: offer.id, rating, title, comment, tags, buyer_name: user?.name || 'Buyer', buyer_email: user?.email || null }) });
+    if (r.ok) { toast.success('Thanks! Your review helps other buyers.'); onSubmitted(r.review); onClose(); }
+    else toast.error(r.error || 'Failed');
+    setSaving(false);
+  }
+  return (
+    <Dialog open onOpenChange={o => !o && onClose()}>
+      <DialogContent className="max-w-md bg-background/95 border-white/10">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-2xl">Rate your experience</DialogTitle>
+          <DialogDescription>How was buying from <span className="text-foreground">{offer.supplier_name}</span>?</DialogDescription>
+        </DialogHeader>
+        <div className="flex justify-center gap-2 my-4">
+          {[1,2,3,4,5].map(n => (
+            <button key={n} onMouseEnter={() => setHover(n)} onMouseLeave={() => setHover(0)} onClick={() => setRating(n)} className="transition-transform hover:scale-110">
+              <Star className={`w-9 h-9 ${(hover || rating) >= n ? 'fill-yellow-400 text-yellow-400' : 'text-white/20'}`} />
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-2 justify-center mb-3">
+          {TAG_OPTS.map(t => (
+            <button key={t} onClick={() => toggleTag(t)} className={`px-3 py-1 rounded-full text-xs border transition ${tags.includes(t) ? 'bg-fuchsia-500/20 border-fuchsia-500/50 text-fuchsia-200' : 'border-white/10 hover:border-white/20 text-muted-foreground'}`}>{t}</button>
+          ))}
+        </div>
+        <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="Sum it up in one line (optional)" />
+        <Textarea value={comment} onChange={e => setComment(e.target.value)} placeholder="Tell other buyers what stood out..." rows={3} />
+        <Button onClick={submit} disabled={saving} className="w-full bg-gradient-to-br from-fuchsia-500 to-violet-600">
+          {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Star className="w-4 h-4 mr-2" />}Submit review
+        </Button>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ============ MAIN APP ============
 function App() {
   const [view, setView] = useState('home');
@@ -668,6 +733,7 @@ function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [chatOffer, setChatOffer] = useState(null);
   const [payOffer, setPayOffer] = useState(null);
+  const [reviewOffer, setReviewOffer] = useState(null);
 
   useEffect(() => { const s = localStorage.getItem('bb_user'); if (s) try { setUser(JSON.parse(s)); } catch {} }, []);
   useEffect(() => { user ? localStorage.setItem('bb_user', JSON.stringify(user)) : localStorage.removeItem('bb_user'); }, [user]);
@@ -700,6 +766,8 @@ function App() {
     await api(`/offers/${payOffer.id}/accept`, { method: 'POST' });
     const rr = await api(`/requests/${request.id}`);
     setOffers(rr.offers || []); setRequest(rr.request);
+    // Prompt buyer to review after 1s
+    setTimeout(() => setReviewOffer(payOffer), 1200);
   }
   async function openPastRequest(r) {
     const rr = await api(`/requests/${r.id}`);
@@ -721,6 +789,7 @@ function App() {
       <SupplierSignupModal open={supplierSignupOpen} onOpenChange={setSupplierSignupOpen} onDone={() => {}} />
       {chatOffer && <ChatSheet offer={chatOffer} user={user} onClose={() => setChatOffer(null)} />}
       {payOffer && <PaymentModal offer={payOffer} user={user} onClose={() => setPayOffer(null)} onPaid={() => { onPaid(); setPayOffer(null); }} />}
+      {reviewOffer && <ReviewModal offer={reviewOffer} user={user} onClose={() => setReviewOffer(null)} onSubmitted={() => setReviewOffer(null)} />}
     </div>
   );
 }

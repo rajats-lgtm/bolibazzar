@@ -47,6 +47,71 @@ Rules: All prices in INR. Convert lakh(=100000), crore(=10000000), k(=1000). qua
   return parsed;
 }
 
+// --- WhatsApp alerts (Twilio-ready, mock fallback) ---
+function hasWhatsApp() {
+  return !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.WHATSAPP_FROM);
+}
+async function sendWhatsApp(toE164, body) {
+  if (!hasWhatsApp()) {
+    console.log('[whatsapp:mock]', toE164, '\u2192', body.slice(0, 120));
+    return { mocked: true, to: toE164 };
+  }
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`;
+  const auth = Buffer.from(`${sid}:${process.env.TWILIO_AUTH_TOKEN}`).toString('base64');
+  const form = new URLSearchParams({ From: process.env.WHATSAPP_FROM, To: `whatsapp:${toE164}`, Body: body });
+  const r = await fetch(url, { method: 'POST', headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' }, body: form });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d?.message || 'Twilio send failed');
+  return { mocked: false, sid: d.sid };
+}
+async function notifyMatchingSuppliers(db, request) {
+  const brands = [request.requirement.brand].filter(Boolean);
+  const suppliers = await db.collection('suppliers').find({ status: 'approved' }).limit(50).toArray();
+  const matches = suppliers.filter(s => brands.length === 0 || (s.brand_authorisations || []).length === 0 || (s.brand_authorisations || []).some(b => brands.some(x => x.toLowerCase().includes(b.toLowerCase()) || b.toLowerCase().includes(x.toLowerCase()))));
+  const summary = request.requirement.summary || request.requirement.product;
+  const link = `${process.env.NEXT_PUBLIC_BASE_URL || ''}/`;
+  const body = `\u{1F514} New buyer request on BoliBazaar!\n\n${summary}\n\nBudget: ${request.requirement.budget_inr ? '\u20B9' + request.requirement.budget_inr.toLocaleString('en-IN') : 'flexible'}\nLocation: ${request.requirement.location || 'India'}\nQty: ${request.requirement.quantity}\n\nOpen dashboard: ${link}`;
+  const results = [];
+  for (const s of matches) {
+    if (!s.phone) { results.push({ supplier_id: s.id, business_name: s.business_name, skipped: 'no phone' }); continue; }
+    try { const r = await sendWhatsApp(s.phone, body); results.push({ supplier_id: s.id, business_name: s.business_name, ...r }); }
+    catch (e) { results.push({ supplier_id: s.id, business_name: s.business_name, error: e.message }); }
+  }
+  await db.collection('whatsapp_log').insertOne({ id: uuidv4(), request_id: request.id, sent_to: results, body, created_at: new Date().toISOString() });
+  return results;
+}
+
+// --- Value score (deterministic, no LLM cost) ---
+function computeValueScore(offer, requirement) {
+  const budget = requirement.budget_inr && requirement.budget_inr > 500 ? requirement.budget_inr : offer.price_inr;
+  const priceRatio = offer.price_inr / budget;
+  const priceScore = Math.max(0, Math.min(1, 1 - (priceRatio - 0.85) / 0.20));
+  const deliveryScore = Math.max(0, 1 - offer.delivery_days / 5);
+  const w = (offer.warranty || '').toLowerCase();
+  const warrantyScore = w.includes('extended') || w.includes('2 year') ? 1 : w.includes('1 year') ? 0.7 : w.includes('6 month') ? 0.4 : 0.3;
+  const ratingScore = Math.max(0, Math.min(1, (offer.rating - 3.5) / 1.5));
+  const ex = (offer.extras || '').toLowerCase();
+  let extrasScore = 0;
+  if (ex.includes('free')) extrasScore += 0.4;
+  if (ex.includes('off') || ex.includes('cashback')) extrasScore += 0.3;
+  if (ex.includes('emi') || ex.includes('no-cost')) extrasScore += 0.2;
+  if (ex.includes('extended') || ex.includes('applecare')) extrasScore += 0.3;
+  extrasScore = Math.min(1, extrasScore);
+  const distScore = offer.distance_km != null ? Math.max(0, 1 - offer.distance_km / 15) : 0.5;
+  const total = 0.42*priceScore + 0.14*deliveryScore + 0.14*warrantyScore + 0.10*ratingScore + 0.14*extrasScore + 0.06*distScore;
+  const reasons = [];
+  if (priceScore > 0.7) reasons.push('great price');
+  if (deliveryScore >= 1) reasons.push('same-day delivery');
+  else if (deliveryScore > 0.7) reasons.push('fast delivery');
+  if (warrantyScore >= 0.9) reasons.push('extended warranty');
+  if (extrasScore >= 0.6) reasons.push('valuable freebies');
+  if (ratingScore >= 0.8) reasons.push('top-rated supplier');
+  if (distScore >= 0.8) reasons.push('nearby store');
+  if (!reasons.length) reasons.push('balanced offer');
+  return { value_score: Math.round(total * 100), rationale: reasons.join(' \u00b7 ') };
+}
+
 // --- deterministic offer simulation ---
 const SUPPLIER_POOL = [
   { name: 'Croma - Andheri West', type: 'retail_store', rating: 4.6, reviews: 3240, city: 'Mumbai', dist: 2.4 },
@@ -189,6 +254,8 @@ async function route(req, { params }) {
       created_at: new Date().toISOString(),
     };
     await db.collection('requests').insertOne(doc);
+    // Fire-and-forget WhatsApp alerts to matching approved suppliers
+    notifyMatchingSuppliers(db, doc).catch(e => console.error('whatsapp notify', e));
     return ok({ request: doc });
   }
   if (path === '/requests' && method === 'GET') {
@@ -200,7 +267,7 @@ async function route(req, { params }) {
     const id = reqMatch[1];
     const doc = await db.collection('requests').findOne({ id }, { projection: { _id: 0 } });
     if (!doc) return err('not found', 404);
-    const offers = await db.collection('offers').find({ request_id: id }, { projection: { _id: 0 } }).sort({ price_inr: 1 }).toArray();
+    const offers = await db.collection('offers').find({ request_id: id }, { projection: { _id: 0 } }).sort({ value_score: -1, price_inr: 1 }).toArray();
     return ok({ request: doc, offers });
   }
   const simMatch = path.match(/^\/requests\/([^/]+)\/simulate$/);
@@ -209,7 +276,13 @@ async function route(req, { params }) {
     const reqDoc = await db.collection('requests').findOne({ id });
     if (!reqDoc) return err('request not found', 404);
     const offers = simulateOffers(reqDoc.requirement);
-    const withIds = offers.map(o => ({ id: uuidv4(), request_id: id, ...o, status: 'pending', source: 'ai_simulated', created_at: new Date().toISOString() }));
+    const withIds = offers.map(o => {
+      const scored = computeValueScore(o, reqDoc.requirement);
+      return { id: uuidv4(), request_id: id, ...o, ...scored, status: 'pending', source: 'ai_simulated', created_at: new Date().toISOString() };
+    });
+    // Sort by value_score descending, mark top as ai_pick
+    withIds.sort((a, b) => b.value_score - a.value_score);
+    if (withIds[0]) withIds[0].ai_pick = true;
     if (withIds.length) await db.collection('offers').insertMany(withIds);
     return ok({ offers: withIds });
   }
@@ -322,9 +395,59 @@ async function route(req, { params }) {
     const status = valid ? 'paid' : 'signature_failed';
     await db.collection('payments').updateOne({ razorpay_order_id }, { $set: { status, razorpay_payment_id, razorpay_signature: razorpay_signature || null, verified_at: new Date().toISOString() } });
     if (valid) {
-      await db.collection('offers').updateOne({ id: paymentDoc.offer_id }, { $set: { payment_status: 'paid' } });
+      await db.collection('offers').updateOne({ id: paymentDoc.offer_id }, { $set: { payment_status: 'paid', delivery_status: 'delivered' } });
     }
     return ok({ ok: valid, status });
+  }
+
+  // --- Reviews ---
+  if (path === '/reviews' && method === 'POST') {
+    const b = await req.json();
+    if (!b.offer_id || !b.rating) return err('offer_id and rating required');
+    const offer = await db.collection('offers').findOne({ id: b.offer_id });
+    if (!offer) return err('offer not found', 404);
+    const review = {
+      id: uuidv4(),
+      offer_id: b.offer_id,
+      request_id: offer.request_id,
+      supplier_name: offer.supplier_name,
+      supplier_id: offer.supplier_id || null,
+      buyer_name: b.buyer_name || 'Buyer',
+      buyer_email: b.buyer_email || null,
+      rating: Math.max(1, Math.min(5, Number(b.rating))),
+      title: b.title || '',
+      comment: b.comment || '',
+      tags: b.tags || [],
+      created_at: new Date().toISOString(),
+    };
+    await db.collection('reviews').insertOne(review);
+    // Update the offer with review
+    await db.collection('offers').updateOne({ id: b.offer_id }, { $set: { reviewed: true, review_rating: review.rating } });
+    // Recompute supplier aggregate rating (if supplier_id present)
+    if (offer.supplier_id) {
+      const all = await db.collection('reviews').find({ supplier_id: offer.supplier_id }).toArray();
+      const avg = all.reduce((s, r) => s + r.rating, 0) / (all.length || 1);
+      await db.collection('suppliers').updateOne({ id: offer.supplier_id }, { $set: { rating: Math.round(avg * 10) / 10, reviews: all.length } });
+    }
+    return ok({ review });
+  }
+  const revListMatch = path.match(/^\/reviews\/supplier\/(.+)$/);
+  if (revListMatch && method === 'GET') {
+    const supplierId = revListMatch[1];
+    const list = await db.collection('reviews').find({ supplier_id: supplierId }, { projection: { _id: 0 } }).sort({ created_at: -1 }).toArray();
+    return ok({ reviews: list });
+  }
+  const revOfferMatch = path.match(/^\/reviews\/offer\/([^/]+)$/);
+  if (revOfferMatch && method === 'GET') {
+    const offerId = revOfferMatch[1];
+    const r = await db.collection('reviews').findOne({ offer_id: offerId }, { projection: { _id: 0 } });
+    return ok({ review: r || null });
+  }
+
+  // --- WhatsApp log (for debugging + admin dashboard) ---
+  if (path === '/whatsapp/log' && method === 'GET') {
+    const list = await db.collection('whatsapp_log').find({}, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(20).toArray();
+    return ok({ log: list, live: hasWhatsApp() });
   }
 
   return err('route not found: ' + method + ' ' + path, 404);

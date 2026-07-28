@@ -8,7 +8,7 @@ import {
   MapPin, TrendingDown, Package, MessageSquare, Loader2, ChevronRight, Award, Percent,
   Bell, Search, User, LogOut, CreditCard, CheckCircle2, X, FileCheck, Building2, ClipboardList,
   Mic, MicOff, Languages, Timer, BarChart3, Trophy, Zap, TrendingUp, Flame,
-  Volume2, Wallet, Share2, Bot, Plus, Trash2, Power
+  Volume2, Wallet, Share2, Bot, Plus, Trash2, Power, Users, Crown
 } from 'lucide-react';
 
 const LANG_TO_TTS = { en: 'en-IN', hi: 'hi-IN', ta: 'ta-IN', mr: 'mr-IN', bn: 'bn-IN', te: 'te-IN', kn: 'kn-IN', ml: 'ml-IN', gu: 'gu-IN', mixed: 'en-IN' };
@@ -266,7 +266,7 @@ function ChatSheet({ offer, user, onClose }) {
 }
 
 // ============ PAYMENT MODAL ============
-function PaymentModal({ offer, user, wallet, onClose, onPaid, onReloadWallet }) {
+function PaymentModal({ offer, user, wallet, tier, onClose, onPaid, onReloadWallet }) {
   const [step, setStep] = useState('review');
   const [creating, setCreating] = useState(false);
   const [useWallet, setUseWallet] = useState(false);
@@ -359,7 +359,7 @@ function PaymentModal({ offer, user, wallet, onClose, onPaid, onReloadWallet }) 
             <div className="mt-4 text-xl font-semibold">Payment successful 🎉</div>
             <div className="text-sm text-muted-foreground">Order with {offer.supplier_name} confirmed. Delivery in {offer.delivery_days === 0 ? 'a few hours' : `${offer.delivery_days} day(s)`}.</div>
             <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs">
-              <Wallet className="w-3 h-3" />+{formatINR(Math.round(offer.price_inr * 0.02))} cashback added to wallet
+              <Wallet className="w-3 h-3" />+{formatINR(Math.round(offer.price_inr * ((tier?.cashback_pct || 2) / 100)))} {tier?.label || 'Silver'} cashback added to wallet
             </div>
             <div className="mt-5 grid grid-cols-2 gap-2">
               <Button variant="outline" className="border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10" onClick={shareOnWhatsApp}>
@@ -510,7 +510,7 @@ function RequirementPreview({ requirement, onConfirm, onCancel, confirming }) {
   );
 }
 
-function OfferCard({ offer, onAccept, onChat, bestPrice }) {
+function OfferCard({ offer, onAccept, onChat, onTrack, bestPrice }) {
   const showAiPick = offer.ai_pick === true;
   const isCheapest = offer.price_inr === bestPrice;
   const isHighlighted = showAiPick || isCheapest;
@@ -565,6 +565,11 @@ function OfferCard({ offer, onAccept, onChat, bestPrice }) {
       {offer.message && <div className="mt-3 text-sm text-muted-foreground italic">"{offer.message}"</div>}
       <div className="mt-4 flex gap-2 justify-end">
         <Button variant="ghost" size="sm" onClick={() => onChat(offer)}><MessageSquare className="w-4 h-4 mr-2" />Chat</Button>
+        {offer.status === 'accepted' && (
+          <Button size="sm" variant="outline" className="border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/10" onClick={() => onTrack(offer)}>
+            <Truck className="w-4 h-4 mr-2" />Track delivery
+          </Button>
+        )}
         <Button size="sm" disabled={offer.status === 'accepted' || offer.status === 'rejected'} onClick={() => onAccept(offer)} className={showAiPick ? 'bg-gradient-to-br from-fuchsia-500 to-violet-600' : ''}>
           {offer.status === 'accepted' ? <><Check className="w-4 h-4 mr-2" />Accepted</> : offer.status === 'rejected' ? 'Closed' : <>Accept & Pay<ArrowRight className="w-4 h-4 ml-2" /></>}
         </Button>
@@ -700,7 +705,7 @@ function StatCard({ icon, label, value, sub }) {
   );
 }
 
-function OffersView({ request, offers, onAccept, onChat, refreshing, onTick }) {
+function OffersView({ request, offers, onAccept, onChat, onTrack, refreshing, onTick, user }) {
   const [bidClosed, setBidClosed] = useState(request?.status === 'closed');
   const bestPrice = offers.length ? Math.min(...offers.map(o => o.price_inr)) : null;
   return (
@@ -725,6 +730,7 @@ function OffersView({ request, offers, onAccept, onChat, refreshing, onTick }) {
         <BiddingCountdown requestId={request.id} onTick={(r) => onTick(r.offers)} onDone={() => setBidClosed(true)} />
       )}
       {bidClosed && request.status !== 'closed' && <BiddingClosedBanner />}
+      <GroupBuyBanner request={request} user={user} />
 
       {refreshing && !offers.length && (
         <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-12 text-center">
@@ -734,7 +740,7 @@ function OffersView({ request, offers, onAccept, onChat, refreshing, onTick }) {
       )}
       <div className="grid gap-4">
         <AnimatePresence>
-          {offers.map(o => <OfferCard key={o.id} offer={o} onAccept={onAccept} onChat={onChat} bestPrice={bestPrice} />)}
+          {offers.map(o => <OfferCard key={o.id} offer={o} onAccept={onAccept} onChat={onChat} onTrack={onTrack} bestPrice={bestPrice} />)}
         </AnimatePresence>
       </div>
     </div>
@@ -788,7 +794,7 @@ function FAQ() {
 }
 function Footer() { return (<footer className="border-t border-white/10 mt-16"><div className="container mx-auto px-6 py-10 flex flex-col md:flex-row items-center justify-between gap-4"><div className="flex items-center gap-2"><div className="h-8 w-8 rounded-lg bg-gradient-to-br from-fuchsia-500 to-violet-600 grid place-items-center"><Sparkles className="w-4 h-4" /></div><div className="font-semibold">BoliBazaar</div><span className="text-muted-foreground text-sm">· India\'s AI Reverse Marketplace</span></div><div className="text-xs text-muted-foreground">© 2025 BoliBazaar Technologies · Made for Bharat</div></div></footer>); }
 
-function Navbar({ view, setView, user, onLogin, onLogout, onSupplierSignup, wallet }) {
+function Navbar({ view, setView, user, onLogin, onLogout, onSupplierSignup, wallet, tier }) {
   return (
     <header className="sticky top-0 z-40 backdrop-blur-xl bg-background/60 border-b border-white/5">
       <div className="container mx-auto px-6 h-16 flex items-center justify-between">
@@ -814,7 +820,7 @@ function Navbar({ view, setView, user, onLogin, onLogout, onSupplierSignup, wall
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuLabel><div>{user.name}</div><div className="text-xs text-muted-foreground font-normal">{user.email}</div></DropdownMenuLabel>
+                <DropdownMenuLabel><div className="flex items-center gap-2">{user.name}{tier && <TierBadge tier={tier} small />}</div><div className="text-xs text-muted-foreground font-normal">{user.email}</div></DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => setView('my_requests')}><ClipboardList className="w-4 h-4 mr-2" />My requests</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setView('wallet')}><Wallet className="w-4 h-4 mr-2" />Wallet <span className="ml-auto text-xs text-emerald-400">{formatINR(wallet?.balance_inr || 0)}</span></DropdownMenuItem>
@@ -965,19 +971,56 @@ function ReviewModal({ offer, user, onClose, onSubmitted }) {
 }
 
 // ============ WALLET VIEW ============
-function WalletView({ user, wallet, refresh }) {
+function WalletView({ user, wallet, tier, refresh }) {
   useEffect(() => { refresh?.(); }, []);
   const tx = wallet?.transactions || [];
+  const spent = user?.total_spent_inr || 0;
+  const nextAt = tier?.next_tier_at;
+  const progress = nextAt ? Math.min(100, Math.round((spent / nextAt) * 100)) : 100;
   return (
     <div className="container mx-auto px-6 py-12 max-w-2xl">
       <Badge variant="outline" className="mb-3"><Wallet className="w-3 h-3 mr-1" />Your wallet</Badge>
-      <h1 className="text-4xl font-semibold">BoliBazaar wallet</h1>
-      <p className="text-muted-foreground mt-2">Earn 2% cashback on every purchase. Apply on any future order.</p>
+      <div className="flex items-center gap-3 flex-wrap">
+        <h1 className="text-4xl font-semibold">BoliBazaar wallet</h1>
+        {tier && <TierBadge tier={tier} />}
+      </div>
+      <p className="text-muted-foreground mt-2">Earn <span className="text-foreground font-medium">{tier?.cashback_pct || 2}%</span> {tier?.label || 'Silver'} cashback on every purchase. Apply on any future order.</p>
       <div className="mt-6 rounded-3xl border border-emerald-500/30 bg-gradient-to-br from-emerald-500/[0.08] to-cyan-500/[0.04] p-8">
         <div className="text-sm text-emerald-300/80">Available balance</div>
         <div className="text-5xl font-bold mt-1">{formatINR(wallet?.balance_inr || 0)}</div>
         <div className="mt-4 text-sm text-muted-foreground">{tx.length} transaction{tx.length === 1 ? '' : 's'} · Cashback credited on delivery</div>
       </div>
+
+      {/* Tier progress */}
+      {tier && (
+        <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] p-5">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <div className="text-xs uppercase tracking-wider text-muted-foreground">Loyalty tier</div>
+              <div className="mt-1 flex items-center gap-2"><span className="text-2xl font-semibold">{tier.label}</span><Crown className="w-5 h-5" style={{color: tier.color}} /></div>
+            </div>
+            <div className="text-right">
+              <div className="text-xs text-muted-foreground">Total spent</div>
+              <div className="font-semibold">{formatINR(spent)}</div>
+            </div>
+          </div>
+          {nextAt ? (
+            <>
+              <div className="mt-4 h-2 rounded-full bg-white/10 overflow-hidden">
+                <div className={`h-full bg-gradient-to-r ${tier.badge_gradient}`} style={{ width: `${progress}%` }} />
+              </div>
+              <div className="mt-2 flex justify-between text-xs text-muted-foreground">
+                <span>{tier.label}</span>
+                <span>{formatINR(Math.max(0, nextAt - spent))} to <span className="text-foreground">{tier.next_label}</span></span>
+              </div>
+              <div className="mt-3 text-xs text-muted-foreground">Unlock priority offers + higher cashback at every tier</div>
+            </>
+          ) : (
+            <div className="mt-3 text-sm text-fuchsia-300">🏆 You&apos;ve hit our highest tier. Max cashback + priority offers unlocked.</div>
+          )}
+        </div>
+      )}
+
       <div className="mt-8">
         <div className="text-xs uppercase tracking-wider text-muted-foreground mb-3">Recent activity</div>
         {tx.length === 0 && <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-8 text-center text-muted-foreground text-sm">No transactions yet. Complete your first order to earn cashback.</div>}
@@ -1085,6 +1128,169 @@ function AutoBidRulesPanel({ email }) {
   );
 }
 
+// ============ DELIVERY TRACKER ============
+const CITY_XY = {
+  // stylised India SVG (viewBox 0 0 400 500). Rough positions.
+  Mumbai:[110,275], Delhi:[195,110], Bengaluru:[190,395], Bangalore:[190,395], Chennai:[240,410],
+  Hyderabad:[200,335], Pune:[130,290], Kolkata:[320,230], Ahmedabad:[110,220], Jaipur:[155,175],
+  Surat:[115,240], Lucknow:[225,155], Kanpur:[225,170], Nagpur:[210,275], Indore:[170,235],
+  Bhopal:[190,225], Coimbatore:[195,430], Chandigarh:[180,95], Kochi:[190,455], Goa:[135,340],
+};
+function DeliveryTracker({ offer, onClose }) {
+  const [data, setData] = useState(null);
+  useEffect(() => {
+    async function fetchIt() { const r = await api(`/delivery/${offer.id}`); setData(r.delivery); }
+    fetchIt();
+    const t = setInterval(fetchIt, 5000);
+    return () => clearInterval(t);
+  }, [offer.id]);
+  if (!data) return (
+    <Dialog open onOpenChange={o => !o && onClose()}>
+      <DialogContent className="max-w-2xl bg-background/95 border-white/10"><div className="py-12 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-fuchsia-400" /></div></DialogContent>
+    </Dialog>
+  );
+  const from = CITY_XY[data.from_city] || CITY_XY.Mumbai;
+  const to = CITY_XY[data.to_city] || CITY_XY.Delhi;
+  const progress = data.progress / 100;
+  const cx = from[0] + (to[0] - from[0]) * progress;
+  const cy = from[1] + (to[1] - from[1]) * progress;
+  return (
+    <Dialog open onOpenChange={o => !o && onClose()}>
+      <DialogContent className="max-w-2xl bg-background/95 border-white/10 max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Truck className="w-5 h-5 text-cyan-400" />Live delivery tracking</DialogTitle>
+          <DialogDescription>{offer.supplier_name} · Tracking ID <span className="font-mono text-foreground">{data.tracking_id}</span></DialogDescription>
+        </DialogHeader>
+        <div className="grid md:grid-cols-2 gap-4 mt-2">
+          {/* Map */}
+          <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-slate-950/70 to-indigo-950/50 p-3 relative overflow-hidden">
+            <svg viewBox="0 0 400 500" className="w-full h-auto">
+              {/* Stylised India outline */}
+              <path d="M180 60 L215 85 L245 120 L260 155 L290 180 L305 220 L340 220 L340 260 L320 280 L305 310 L295 340 L280 370 L260 395 L245 420 L230 445 L200 470 L180 465 L170 435 L155 410 L155 385 L145 360 L130 335 L120 305 L110 275 L100 245 L100 210 L110 175 L130 145 L150 115 L170 85 Z" fill="rgba(139,92,246,0.06)" stroke="rgba(255,255,255,0.10)" strokeWidth="1.5" />
+              {/* Static city dots */}
+              {Object.entries(CITY_XY).slice(0, 12).map(([c, [x, y]]) => (
+                <g key={c}>
+                  <circle cx={x} cy={y} r="2" fill="rgba(255,255,255,0.25)" />
+                </g>
+              ))}
+              {/* Route line */}
+              <line x1={from[0]} y1={from[1]} x2={to[0]} y2={to[1]} stroke="url(#grad)" strokeWidth="2" strokeDasharray="4 4" />
+              <defs><linearGradient id="grad" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stopColor="#a21caf" /><stop offset="100%" stopColor="#22d3ee" /></linearGradient></defs>
+              {/* From city */}
+              <g>
+                <circle cx={from[0]} cy={from[1]} r="6" fill="#a21caf" />
+                <circle cx={from[0]} cy={from[1]} r="12" fill="#a21caf" opacity="0.25">
+                  <animate attributeName="r" values="6;16;6" dur="2s" repeatCount="indefinite" />
+                  <animate attributeName="opacity" values="0.5;0;0.5" dur="2s" repeatCount="indefinite" />
+                </circle>
+                <text x={from[0] + 10} y={from[1] + 4} fill="white" fontSize="11" fontWeight="600">{data.from_city}</text>
+              </g>
+              {/* To city */}
+              <g>
+                <circle cx={to[0]} cy={to[1]} r="6" fill="#22d3ee" />
+                <circle cx={to[0]} cy={to[1]} r="12" fill="#22d3ee" opacity="0.25">
+                  <animate attributeName="r" values="6;16;6" dur="2s" repeatCount="indefinite" />
+                  <animate attributeName="opacity" values="0.5;0;0.5" dur="2s" repeatCount="indefinite" />
+                </circle>
+                <text x={to[0] + 10} y={to[1] + 4} fill="white" fontSize="11" fontWeight="600">{data.to_city}</text>
+              </g>
+              {/* Moving truck */}
+              <g transform={`translate(${cx - 10}, ${cy - 8})`}>
+                <rect x="0" y="0" width="20" height="14" rx="3" fill="#fbbf24" />
+                <circle cx="4" cy="15" r="2" fill="#1f2937" />
+                <circle cx="16" cy="15" r="2" fill="#1f2937" />
+              </g>
+            </svg>
+          </div>
+          {/* Status timeline + ETA */}
+          <div className="space-y-3">
+            <div className="rounded-xl border border-cyan-500/30 bg-cyan-500/[0.05] p-4">
+              <div className="text-xs uppercase tracking-wider text-muted-foreground">Estimated arrival</div>
+              <div className="text-2xl font-bold mt-1">{data.delivered ? 'Delivered' : (data.eta_days > 1 ? `${data.eta_days} days` : data.eta_minutes > 60 ? `${Math.round(data.eta_minutes / 60)} hours` : `${data.eta_minutes} min`)}</div>
+              <div className="text-xs text-muted-foreground mt-1">Via {data.courier}</div>
+              <div className="mt-3 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                <div className="h-full bg-gradient-to-r from-fuchsia-500 to-cyan-400 transition-all duration-1000" style={{ width: `${data.progress}%` }} />
+              </div>
+              <div className="text-[10px] text-muted-foreground mt-1 text-right">{data.progress}%</div>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
+              {data.stages.map((s, i) => {
+                const done = i <= data.stage_index;
+                const active = i === data.stage_index;
+                return (
+                  <div key={s.key} className="flex items-start gap-3">
+                    <div className={`h-6 w-6 rounded-full grid place-items-center shrink-0 mt-0.5 ${done ? 'bg-emerald-500/20 border border-emerald-500/40' : 'bg-white/5 border border-white/10'}`}>
+                      {done ? <Check className="w-3 h-3 text-emerald-400" /> : <div className="h-1.5 w-1.5 rounded-full bg-white/30" />}
+                    </div>
+                    <div className={`text-sm ${active ? 'font-semibold text-foreground' : done ? 'text-foreground/80' : 'text-muted-foreground'}`}>
+                      {s.label}
+                      {active && !data.delivered && <span className="ml-2 text-xs text-cyan-400 animate-pulse">in progress</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ============ GROUP BUY BANNER ============
+function GroupBuyBanner({ request, user }) {
+  const [suggestion, setSuggestion] = useState(null);
+  const [joining, setJoining] = useState(false);
+  useEffect(() => { (async () => { const r = await api(`/requests/${request.id}/group-suggestion`); setSuggestion(r); })(); }, [request.id]);
+  if (!suggestion) return null;
+  const g = suggestion.existing_group;
+  const totalMembers = g ? g.members.length : 1;
+  const target = g?.target_size || 5;
+  const remaining = Math.max(0, target - totalMembers);
+
+  async function joinOrCreate() {
+    if (!user?.email) return toast.error('Sign in to join group buy');
+    setJoining(true);
+    if (g) {
+      const already = g.members.some(m => m.email === user.email);
+      if (already) { toast.info('You are already in this group'); setJoining(false); return; }
+      const r = await api(`/groups/${g.id}/join`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ buyer_email: user.email, buyer_name: user.name }) });
+      if (r.ok) { toast.success('Joined group buy! Deeper discounts unlocking...'); setSuggestion({ ...suggestion, existing_group: r.group }); }
+    } else {
+      const r = await api(`/groups`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ request_id: request.id, buyer_email: user.email, buyer_name: user.name }) });
+      if (r.ok) { toast.success('Group buy started! Invite friends to unlock bigger discounts.'); setSuggestion({ ...suggestion, existing_group: r.group }); }
+    }
+    setJoining(false);
+  }
+
+  if (!g && suggestion.similar_count === 0) return null;
+  return (
+    <div className="rounded-2xl border border-cyan-500/30 bg-gradient-to-br from-cyan-500/[0.06] to-blue-500/[0.03] p-4 mb-6 flex items-center justify-between gap-4 flex-wrap">
+      <div className="flex items-center gap-3">
+        <div className="h-10 w-10 rounded-full bg-cyan-500/20 grid place-items-center"><Users className="w-5 h-5 text-cyan-400" /></div>
+        <div>
+          <div className="font-semibold">{g ? `${totalMembers} buyers want the same product` : `${suggestion.similar_count} other buyer${suggestion.similar_count === 1 ? '' : 's'} recently asked for this`}</div>
+          <div className="text-xs text-muted-foreground">{g ? `${remaining} more to unlock deeper bulk discount from suppliers` : 'Start a group buy to unlock deeper bulk pricing'}</div>
+        </div>
+      </div>
+      <Button size="sm" onClick={joinOrCreate} disabled={joining} className="bg-gradient-to-br from-cyan-500 to-blue-600">
+        {joining ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Users className="w-4 h-4 mr-2" />}{g ? 'Join group buy' : 'Start group buy'}
+      </Button>
+    </div>
+  );
+}
+
+// ============ TIER BADGE ============
+function TierBadge({ tier, small }) {
+  if (!tier) return null;
+  const cls = tier.tier === 'platinum' ? 'from-slate-300 to-indigo-300 text-slate-900' : tier.tier === 'gold' ? 'from-amber-400 to-yellow-300 text-amber-950' : 'from-slate-400 to-slate-300 text-slate-900';
+  return (
+    <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-r ${cls} font-semibold ${small ? 'text-[10px]' : 'text-xs'}`}>
+      <Award className={small ? 'w-2.5 h-2.5' : 'w-3 h-3'} />{tier.label}
+    </div>
+  );
+}
+
 // ============ MAIN APP ============
 function App() {
   const [view, setView] = useState('home');
@@ -1101,12 +1307,18 @@ function App() {
   const [chatOffer, setChatOffer] = useState(null);
   const [payOffer, setPayOffer] = useState(null);
   const [reviewOffer, setReviewOffer] = useState(null);
+  const [trackOffer, setTrackOffer] = useState(null);
   const [wallet, setWallet] = useState(null);
+  const [tier, setTier] = useState(null);
 
   async function loadWallet() {
-    if (!user?.email) { setWallet(null); return; }
-    const r = await api(`/wallet/${encodeURIComponent(user.email)}`);
-    if (r.ok) setWallet(r.wallet);
+    if (!user?.email) { setWallet(null); setTier(null); return; }
+    const [w, m] = await Promise.all([
+      api(`/wallet/${encodeURIComponent(user.email)}`),
+      api(`/me/${encodeURIComponent(user.email)}`),
+    ]);
+    if (w.ok) setWallet(w.wallet);
+    if (m.ok) setTier(m.user.tier);
   }
   useEffect(() => { loadWallet(); }, [user?.email]);
 
@@ -1152,20 +1364,21 @@ function App() {
   return (
     <div>
       <Script src="https://checkout.razorpay.com/v1/checkout.js" strategy="afterInteractive" />
-      <Navbar view={view} setView={(v) => { setView(v); if (v === 'home') { setRequest(null); setOffers([]); } }} user={user} onLogin={() => setLoginOpen(true)} onLogout={() => setUser(null)} onSupplierSignup={() => setSupplierSignupOpen(true)} wallet={wallet} />
+      <Navbar view={view} setView={(v) => { setView(v); if (v === 'home') { setRequest(null); setOffers([]); } }} user={user} onLogin={() => setLoginOpen(true)} onLogout={() => setUser(null)} onSupplierSignup={() => setSupplierSignupOpen(true)} wallet={wallet} tier={tier} />
 
       {view === 'home' && !request && (<><Hero onSubmit={handleExtract} loading={loading} /><FeaturedElectronics /><HowItWorks /><FAQ /><Footer /></>)}
-      {view === 'offers' && request && (<><OffersView request={request} offers={offers} onAccept={acceptOffer} onChat={setChatOffer} refreshing={refreshing} onTick={(newOffers) => setOffers(newOffers)} /><Footer /></>)}
+      {view === 'offers' && request && (<><OffersView request={request} offers={offers} onAccept={acceptOffer} onChat={setChatOffer} onTrack={setTrackOffer} refreshing={refreshing} onTick={(newOffers) => setOffers(newOffers)} user={user} /><Footer /></>)}
       {view === 'supplier' && (<><SupplierDashboard onSignup={() => setSupplierSignupOpen(true)} user={user} /><Footer /></>)}
       {view === 'my_requests' && user && (<><MyRequests user={user} onOpen={openPastRequest} /><Footer /></>)}
-      {view === 'wallet' && user && (<><WalletView user={user} wallet={wallet} refresh={loadWallet} /><Footer /></>)}
+      {view === 'wallet' && user && (<><WalletView user={user} wallet={wallet} tier={tier} refresh={loadWallet} /><Footer /></>)}
 
       {requirement && <RequirementPreview requirement={requirement} onConfirm={confirmRequirement} onCancel={() => setRequirement(null)} confirming={confirming} />}
       <LoginModal open={loginOpen} onOpenChange={setLoginOpen} onLogin={setUser} />
       <SupplierSignupModal open={supplierSignupOpen} onOpenChange={setSupplierSignupOpen} onDone={() => {}} />
       {chatOffer && <ChatSheet offer={chatOffer} user={user} onClose={() => setChatOffer(null)} />}
-      {payOffer && <PaymentModal offer={payOffer} user={user} wallet={wallet} onReloadWallet={loadWallet} onClose={() => setPayOffer(null)} onPaid={() => { onPaid(); setPayOffer(null); }} />}
+      {payOffer && <PaymentModal offer={payOffer} user={user} wallet={wallet} tier={tier} onReloadWallet={loadWallet} onClose={() => setPayOffer(null)} onPaid={() => { onPaid(); setPayOffer(null); }} />}
       {reviewOffer && <ReviewModal offer={reviewOffer} user={user} onClose={() => setReviewOffer(null)} onSubmitted={() => setReviewOffer(null)} />}
+      {trackOffer && <DeliveryTracker offer={trackOffer} onClose={() => setTrackOffer(null)} />}
     </div>
   );
 }

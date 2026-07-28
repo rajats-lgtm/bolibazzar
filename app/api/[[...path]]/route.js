@@ -168,6 +168,67 @@ async function runAutoBidMatching(db, request) {
   return offers;
 }
 
+// --- Loyalty tiers ---
+function computeTier(totalSpent) {
+  const s = Number(totalSpent) || 0;
+  if (s >= 200000) return { tier: 'platinum', label: 'Platinum', cashback_pct: 5, color: '#a5b4fc', badge_gradient: 'from-slate-300 to-indigo-300', next_tier_at: null, next_label: null };
+  if (s >= 50000) return { tier: 'gold', label: 'Gold', cashback_pct: 3, color: '#fbbf24', badge_gradient: 'from-amber-400 to-yellow-300', next_tier_at: 200000, next_label: 'Platinum' };
+  return { tier: 'silver', label: 'Silver', cashback_pct: 2, color: '#94a3b8', badge_gradient: 'from-slate-400 to-slate-300', next_tier_at: 50000, next_label: 'Gold' };
+}
+
+// --- City coordinates for delivery map (India) ---
+const CITY_COORDS = {
+  Mumbai: [19.076, 72.877], Delhi: [28.704, 77.102], Bengaluru: [12.972, 77.594], Bangalore: [12.972, 77.594],
+  Chennai: [13.083, 80.270], Hyderabad: [17.385, 78.487], Pune: [18.520, 73.856], Kolkata: [22.573, 88.364],
+  Ahmedabad: [23.023, 72.572], Jaipur: [26.912, 75.788], Surat: [21.170, 72.831], Lucknow: [26.847, 80.947],
+  Kanpur: [26.449, 80.332], Nagpur: [21.146, 79.088], Indore: [22.720, 75.858], Bhopal: [23.259, 77.413],
+  Coimbatore: [11.017, 76.956], Chandigarh: [30.734, 76.779], Kochi: [9.931, 76.267], Goa: [15.298, 74.124],
+};
+
+// --- Delivery ETA/status ---
+async function deliveryStatus(db, offerId) {
+  const offer = await db.collection('offers').findOne({ id: offerId });
+  if (!offer) return null;
+  const request = await db.collection('requests').findOne({ id: offer.request_id });
+  const payment = await db.collection('payments').findOne({ offer_id: offerId, status: 'paid' });
+  const paidAt = payment?.verified_at ? new Date(payment.verified_at).getTime() : Date.now();
+  const totalMs = Math.max(1, (offer.delivery_days || 2)) * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const elapsed = now - paidAt;
+  const progress = Math.min(1, elapsed / totalMs);
+  const stages = [
+    { key: 'confirmed', label: 'Order confirmed', at: 0 },
+    { key: 'packed', label: 'Packed at store', at: 0.15 },
+    { key: 'shipped', label: 'Shipped', at: 0.35 },
+    { key: 'out_for_delivery', label: 'Out for delivery', at: 0.80 },
+    { key: 'delivered', label: 'Delivered', at: 1.0 },
+  ];
+  const currentStage = stages.filter(s => progress >= s.at).slice(-1)[0] || stages[0];
+  const stageIndex = stages.findIndex(s => s.key === currentStage.key);
+  const remainMs = Math.max(0, totalMs - elapsed);
+  const remainMin = Math.round(remainMs / 60000);
+  // Location: supplier city -> buyer city
+  const supplierCity = (offer.supplier_name || '').split(' - ')[1] || (offer.supplier_name || '').match(/(Mumbai|Delhi|Bengaluru|Bangalore|Chennai|Hyderabad|Pune|Kolkata|Ahmedabad|Jaipur|Chandigarh|Kochi|Goa|Coimbatore)/i)?.[0] || 'Mumbai';
+  const buyerCity = request?.requirement?.location || supplierCity;
+  const from = CITY_COORDS[supplierCity] || CITY_COORDS.Mumbai;
+  const to = CITY_COORDS[buyerCity] || from;
+  const cur = [from[0] + (to[0] - from[0]) * progress, from[1] + (to[1] - from[1]) * progress];
+  return {
+    offer_id: offerId,
+    stage: currentStage.key,
+    stage_index: stageIndex,
+    stages,
+    progress: Math.round(progress * 100),
+    from_city: supplierCity, to_city: buyerCity,
+    from_coords: from, to_coords: to, current_coords: cur,
+    eta_minutes: remainMin,
+    eta_days: Math.ceil(remainMin / (60 * 24)),
+    delivered: progress >= 1,
+    courier: ['BoliBazaar Express', 'BlueDart', 'Delhivery', 'Ekart', 'Shadowfax'][Math.floor((offerId.charCodeAt(0) + offerId.charCodeAt(1)) % 5)],
+    tracking_id: 'BB' + offerId.slice(0, 8).toUpperCase(),
+  };
+}
+
 // --- Deterministic offer simulation ---
 const SUPPLIER_POOL = [
   { name: 'Croma - Andheri West', type: 'retail_store', rating: 4.6, reviews: 3240, city: 'Mumbai', dist: 2.4 },
@@ -259,7 +320,8 @@ async function route(req, { params }) {
     const user = await db.collection('users').findOne({ email }, { projection: { _id: 0 } });
     if (!user) return err('not found', 404);
     const requests = await db.collection('requests').find({ buyer_email: email }, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(50).toArray();
-    return ok({ user, requests });
+    const tier = computeTier(user.total_spent_inr || 0);
+    return ok({ user: { ...user, tier }, requests });
   }
 
   // --- Suppliers ---
@@ -467,17 +529,24 @@ async function route(req, { params }) {
     await db.collection('payments').updateOne({ razorpay_order_id }, { $set: { status, razorpay_payment_id, razorpay_signature: razorpay_signature || null, verified_at: new Date().toISOString() } });
     if (valid) {
       await db.collection('offers').updateOne({ id: paymentDoc.offer_id }, { $set: { payment_status: 'paid', delivery_status: 'delivered' } });
-      // Wallet accounting: deduct used, credit 2% cashback on original amount
+      // Wallet accounting + tier update
       if (paymentDoc.buyer_email) {
         const email = paymentDoc.buyer_email;
+        const user = await db.collection('users').findOne({ email });
+        const currentSpent = (user?.total_spent_inr || 0);
+        const newSpent = currentSpent + (paymentDoc.original_amount_inr || paymentDoc.amount_inr);
+        const tier = computeTier(newSpent);
+        if (user) {
+          await db.collection('users').updateOne({ email }, { $set: { total_spent_inr: newSpent, tier: tier.tier } });
+        }
         let w = await db.collection('wallets').findOne({ email });
         if (!w) { w = { email, balance_inr: 0, transactions: [], created_at: new Date().toISOString() }; await db.collection('wallets').insertOne({ ...w }); }
         const now = new Date().toISOString();
         const used = paymentDoc.wallet_used_inr || 0;
-        const cashback = Math.round((paymentDoc.original_amount_inr || paymentDoc.amount_inr) * 0.02);
+        const cashback = Math.round((paymentDoc.original_amount_inr || paymentDoc.amount_inr) * (tier.cashback_pct / 100));
         const txs = [];
         if (used > 0) txs.push({ id: uuidv4(), type: 'debit', amount: used, reason: 'Wallet applied on purchase', offer_id: paymentDoc.offer_id, at: now });
-        txs.push({ id: uuidv4(), type: 'credit', amount: cashback, reason: '2% BoliBazaar cashback', offer_id: paymentDoc.offer_id, at: now });
+        txs.push({ id: uuidv4(), type: 'credit', amount: cashback, reason: `${tier.cashback_pct}% ${tier.label} cashback`, offer_id: paymentDoc.offer_id, at: now });
         const newBal = (w.balance_inr || 0) - used + cashback;
         await db.collection('wallets').updateOne({ email }, { $set: { balance_inr: newBal }, $push: { transactions: { $each: txs } } });
       }
@@ -697,6 +766,72 @@ async function route(req, { params }) {
     if (!w) return err('wallet not found', 404);
     const applied = Math.max(0, Math.min(w.balance_inr, Number(amount_inr) || 0));
     return ok({ applicable: applied, balance: w.balance_inr });
+  }
+
+  // --- Group buying ---
+  if (path === '/groups' && method === 'POST') {
+    const b = await req.json();
+    if (!b.request_id) return err('request_id required');
+    const reqDoc = await db.collection('requests').findOne({ id: b.request_id });
+    if (!reqDoc) return err('request not found', 404);
+    const group = {
+      id: uuidv4(),
+      seed_request_id: b.request_id,
+      product_key: `${reqDoc.requirement.brand || ''}_${reqDoc.requirement.model || reqDoc.requirement.product || ''}_${reqDoc.requirement.storage || ''}`.toLowerCase().replace(/\s+/g, '_'),
+      requirement: reqDoc.requirement,
+      members: [{ email: b.buyer_email || reqDoc.buyer_email, name: b.buyer_name || reqDoc.buyer_name, joined_at: new Date().toISOString() }],
+      target_size: 5,
+      status: 'open',
+      created_at: new Date().toISOString(),
+    };
+    await db.collection('groups').insertOne(group);
+    return ok({ group });
+  }
+  if (path === '/groups' && method === 'GET') {
+    const url = new URL(req.url);
+    const productKey = url.searchParams.get('product_key');
+    const q = { status: 'open' };
+    if (productKey) q.product_key = productKey;
+    const list = await db.collection('groups').find(q, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(20).toArray();
+    return ok({ groups: list });
+  }
+  const groupJoinMatch = path.match(/^\/groups\/([^/]+)\/join$/);
+  if (groupJoinMatch && method === 'POST') {
+    const id = groupJoinMatch[1];
+    const b = await req.json();
+    if (!b.buyer_email) return err('buyer_email required');
+    const g = await db.collection('groups').findOne({ id });
+    if (!g) return err('group not found', 404);
+    if (g.members.some(m => m.email === b.buyer_email)) return err('already joined');
+    const member = { email: b.buyer_email, name: b.buyer_name || 'Buyer', joined_at: new Date().toISOString() };
+    await db.collection('groups').updateOne({ id }, { $push: { members: member } });
+    const upd = await db.collection('groups').findOne({ id }, { projection: { _id: 0 } });
+    return ok({ group: upd });
+  }
+  const groupSuggestMatch = path.match(/^\/requests\/([^/]+)\/group-suggestion$/);
+  if (groupSuggestMatch && method === 'GET') {
+    const id = groupSuggestMatch[1];
+    const r = await db.collection('requests').findOne({ id });
+    if (!r) return err('not found', 404);
+    const productKey = `${r.requirement.brand || ''}_${r.requirement.model || r.requirement.product || ''}_${r.requirement.storage || ''}`.toLowerCase().replace(/\s+/g, '_');
+    const existingGroup = await db.collection('groups').findOne({ product_key: productKey, status: 'open' });
+    // Similar recent requests (last 7 days) with same brand/product
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const similar = await db.collection('requests').find({
+      id: { $ne: id },
+      'requirement.brand': r.requirement.brand,
+      'requirement.sub_category': r.requirement.sub_category,
+      created_at: { $gte: weekAgo },
+    }, { projection: { _id: 0 } }).limit(10).toArray();
+    return ok({ existing_group: existingGroup, similar_count: similar.length, similar_requests: similar.slice(0, 5), product_key: productKey });
+  }
+
+  // --- Delivery tracking ---
+  const deliveryMatch = path.match(/^\/delivery\/([^/]+)$/);
+  if (deliveryMatch && method === 'GET') {
+    const status = await deliveryStatus(db, deliveryMatch[1]);
+    if (!status) return err('offer not found', 404);
+    return ok({ delivery: status });
   }
 
   return err('route not found: ' + method + ' ' + path, 404);

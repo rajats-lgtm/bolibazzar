@@ -11,6 +11,53 @@ body {
     -moz-osx-font-smoothing: grayscale;
 }
 
+/* ================ Light mode adapters ================ */
+/* Our components heavily use white/x opacity classes tuned for dark bg.
+   In light mode we transparently invert these to look great on white. */
+html:not(.dark) body { background: #fafbff; color: #0a0a12; }
+html:not(.dark) .bg-background { background-color: #ffffff !important; }
+html:not(.dark) .text-foreground { color: #0a0a12 !important; }
+html:not(.dark) .text-muted-foreground { color: rgb(100 116 139) !important; }
+
+/* Flip white overlays to soft slate overlays for the same "glass card" effect on light */
+html:not(.dark) .bg-white\/5,
+html:not(.dark) .bg-white\/\[0\.02\],
+html:not(.dark) .bg-white\/\[0\.03\],
+html:not(.dark) .bg-white\/\[0\.04\] { background-color: rgba(15, 23, 42, 0.03) !important; }
+html:not(.dark) .hover\:bg-white\/10:hover,
+html:not(.dark) .hover\:bg-white\/\[0\.04\]:hover { background-color: rgba(15, 23, 42, 0.06) !important; }
+html:not(.dark) .bg-white\/10 { background-color: rgba(15, 23, 42, 0.06) !important; }
+
+html:not(.dark) .border-white\/5,
+html:not(.dark) .border-white\/10,
+html:not(.dark) .border-white\/20 { border-color: rgba(15, 23, 42, 0.10) !important; }
+html:not(.dark) .hover\:border-white\/20:hover { border-color: rgba(15, 23, 42, 0.20) !important; }
+
+/* Backdrop container gets solid whitish blur */
+html:not(.dark) .bg-background\/60 { background-color: rgba(255,255,255,0.75) !important; }
+html:not(.dark) .bg-background\/95 { background-color: rgba(255,255,255,0.97) !important; }
+
+/* Dialog descriptions / Card boundaries */
+html:not(.dark) .border-input { border-color: rgba(15,23,42,0.15) !important; }
+
+/* Search box glass */
+html:not(.dark) .shadow-fuchsia-500\/5 { box-shadow: 0 10px 40px -10px rgba(232, 121, 249, 0.15) !important; }
+
+/* Buttons variants that used dark-only tokens */
+html:not(.dark) .bg-white.text-black { background: #0a0a12 !important; color: white !important; }
+
+/* Cart cutout adapts to theme via CSS variable */
+:root { --bb-cut: #ffffff; }
+html.dark { --bb-cut: #0a0a0f; }
+.bb-logo-svg .bb-cart { transform-origin: 30px 44px; transition: transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.bb-logo:hover .bb-cart, .bb-logo-svg:hover .bb-cart { transform: translateX(4px) rotate(-8deg); }
+
+/* Splash screen */
+@keyframes bb-splash-in { 0% { opacity: 0; transform: scale(0.9); } 60% { opacity: 1; transform: scale(1.02); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes bb-splash-out { 0% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
+.bb-splash { animation: bb-splash-in 0.7s ease-out forwards; }
+.bb-splash-fade { animation: bb-splash-out 0.5s ease-in forwards; }
+
 code {
     font-family: source-code-pro, Menlo, Monaco, Consolas, "Courier New",
         monospace;

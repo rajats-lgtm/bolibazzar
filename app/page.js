@@ -8,7 +8,7 @@ import {
   MapPin, TrendingDown, Package, MessageSquare, Loader2, ChevronRight, Award, Percent,
   Bell, Search, User, LogOut, CreditCard, CheckCircle2, X, FileCheck, Building2, ClipboardList,
   Mic, MicOff, Languages, Timer, BarChart3, Trophy, Zap, TrendingUp, Flame,
-  Volume2, Wallet, Share2, Bot, Plus, Trash2, Power, Users, Crown
+  Volume2, Wallet, Share2, Bot, Plus, Trash2, Power, Users, Crown, Sun, Moon, Mail, Download, Copy
 } from 'lucide-react';
 
 const LANG_TO_TTS = { en: 'en-IN', hi: 'hi-IN', ta: 'ta-IN', mr: 'mr-IN', bn: 'bn-IN', te: 'te-IN', kn: 'kn-IN', ml: 'ml-IN', gu: 'gu-IN', mixed: 'en-IN' };
@@ -54,8 +54,8 @@ const api = (p, o) => fetch('/api' + p, o).then(r => r.json().then(j => ({ ok: r
 // ============ BOLIBAZZAR LOGO ============
 function BoliBazzarLogo({ size = 32, showWordmark = false, className = '' }) {
   return (
-    <div className={`inline-flex items-center gap-2 ${className}`}>
-      <svg width={size} height={size} viewBox="0 0 64 64" fill="none">
+    <div className={`inline-flex items-center gap-2 bb-logo ${className}`}>
+      <svg className="bb-logo-svg" width={size} height={size} viewBox="0 0 64 64" fill="none">
         <defs>
           <linearGradient id="bbGrad" x1="0" y1="0" x2="1" y2="1">
             <stop offset="0%" stopColor="#4338ca" />
@@ -66,9 +66,9 @@ function BoliBazzarLogo({ size = 32, showWordmark = false, className = '' }) {
         {/* Rounded B block */}
         <path d="M10 6 h26 a18 18 0 0 1 0 26 h-4 a18 18 0 0 1 0 26 h-22 z" fill="url(#bbGrad)" />
         {/* Inner cutouts to shape B */}
-        <path d="M22 14 h12 a10 10 0 0 1 0 18 h-12 z M22 34 h16 a10 10 0 0 1 0 18 h-16 z" fill="#0a0a0f" />
-        {/* Shopping cart inside */}
-        <g transform="translate(21 36)" fill="white">
+        <path d="M22 14 h12 a10 10 0 0 1 0 18 h-12 z M22 34 h16 a10 10 0 0 1 0 18 h-16 z" fill="#0a0a0f" className="dark:fill-[#0a0a0f]" style={{ fill: 'var(--bb-cut, #0a0a0f)' }} />
+        {/* Shopping cart inside (animated on hover) */}
+        <g className="bb-cart" transform="translate(21 36)" fill="white">
           <path d="M0 2 h4 l1.5 12 h13 l1.8 -8 h-13.5" stroke="white" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
           <circle cx="7" cy="17" r="1.6" />
           <circle cx="17" cy="17" r="1.6" />
@@ -83,6 +83,57 @@ function BoliBazzarLogo({ size = 32, showWordmark = false, className = '' }) {
         </div>
       )}
     </div>
+  );
+}
+
+// ============ SPLASH ============
+function Splash({ onDone }) {
+  const [fading, setFading] = useState(false);
+  useEffect(() => {
+    const t1 = setTimeout(() => setFading(true), 1400);
+    const t2 = setTimeout(onDone, 1900);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, []);
+  return (
+    <div className={`fixed inset-0 z-[999] grid place-items-center bg-background ${fading ? 'bb-splash-fade' : 'bb-splash'}`}>
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute -top-40 left-1/2 -translate-x-1/2 h-[500px] w-[700px] rounded-full bg-gradient-to-br from-indigo-500/30 via-fuchsia-500/20 to-orange-500/20 blur-3xl" />
+      </div>
+      <div className="text-center relative">
+        <div className="inline-block">
+          <BoliBazzarLogo size={110} />
+        </div>
+        <div className="mt-6 font-bold text-4xl md:text-5xl tracking-tight">
+          <span className="text-foreground">Boli</span>
+          <span className="bg-gradient-to-r from-fuchsia-500 to-orange-500 bg-clip-text text-transparent">Bazzar</span>
+        </div>
+        <div className="mt-3 text-muted-foreground text-lg">You Ask. Sellers Compete. <span className="text-foreground">You Win.</span></div>
+        <div className="mt-6 flex justify-center gap-1">
+          <div className="h-1.5 w-1.5 rounded-full bg-indigo-500 animate-bounce" style={{animationDelay:'0ms'}} />
+          <div className="h-1.5 w-1.5 rounded-full bg-fuchsia-500 animate-bounce" style={{animationDelay:'150ms'}} />
+          <div className="h-1.5 w-1.5 rounded-full bg-orange-500 animate-bounce" style={{animationDelay:'300ms'}} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============ THEME TOGGLE ============
+function ThemeToggle() {
+  const [dark, setDark] = useState(true);
+  useEffect(() => {
+    const isDark = document.documentElement.classList.contains('dark');
+    setDark(isDark);
+  }, []);
+  function toggle() {
+    const d = document.documentElement;
+    if (d.classList.contains('dark')) { d.classList.remove('dark'); localStorage.setItem('bb_theme', 'light'); setDark(false); }
+    else { d.classList.add('dark'); localStorage.setItem('bb_theme', 'dark'); setDark(true); }
+  }
+  return (
+    <Button variant="ghost" size="sm" onClick={toggle} className="w-9 h-9 p-0" title="Toggle theme">
+      {dark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+    </Button>
   );
 }
 
@@ -849,6 +900,7 @@ function Navbar({ view, setView, user, onLogin, onLogout, onSupplierSignup, wall
           <Button variant={view === 'supplier' ? 'secondary' : 'ghost'} size="sm" onClick={() => setView('supplier')}><Store className="w-4 h-4 mr-2" />Supplier</Button>
         </nav>
         <div className="flex items-center gap-2">
+          <ThemeToggle />
           {user && wallet && wallet.balance_inr > 0 && (
             <button onClick={() => setView('wallet')} className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-sm hover:bg-emerald-500/20 transition">
               <Wallet className="w-4 h-4" />{formatINR(wallet.balance_inr)}
@@ -868,6 +920,7 @@ function Navbar({ view, setView, user, onLogin, onLogout, onSupplierSignup, wall
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => setView('my_requests')}><ClipboardList className="w-4 h-4 mr-2" />My requests</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setView('wallet')}><Wallet className="w-4 h-4 mr-2" />Wallet <span className="ml-auto text-xs text-emerald-400">{formatINR(wallet?.balance_inr || 0)}</span></DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setView('stationery')}><Mail className="w-4 h-4 mr-2" />Emails preview</DropdownMenuItem>
                 <DropdownMenuItem onClick={onLogout}><LogOut className="w-4 h-4 mr-2" />Sign out</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -1335,9 +1388,128 @@ function TierBadge({ tier, small }) {
   );
 }
 
+// ============ STATIONERY (invoice / review-request / cashback emails) ============
+function StationeryView({ user }) {
+  const [tab, setTab] = useState('invoice');
+  const sample = {
+    order_id: 'BB-2025-1042',
+    buyer_name: user?.name || 'Priya Sharma',
+    buyer_email: user?.email || 'priya@test.com',
+    product: 'iPhone 17 Pro Max 256GB Black',
+    supplier: 'Croma - Andheri West',
+    amount: 114400,
+    delivery_date: 'Tomorrow, 5 Jun 2025',
+    tracking: 'BB4A9F12',
+    cashback: Math.round(114400 * 0.03),
+    tier: 'Gold',
+  };
+  const templates = {
+    invoice: {
+      subject: `Your BoliBazzar order #${sample.order_id} is confirmed`,
+      body: (
+        <>
+          <p>Namaste {sample.buyer_name.split(' ')[0]},</p>
+          <p>Thank you for buying on BoliBazzar. Your order is confirmed and the supplier is preparing it for dispatch.</p>
+          <div style={{ background: 'linear-gradient(135deg, rgba(67,56,202,0.06), rgba(249,115,22,0.06))', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 16, padding: 20, margin: '18px 0' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontSize: 12, opacity: 0.7 }}>Order</div>
+                <div style={{ fontWeight: 600 }}>{sample.order_id}</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: 12, opacity: 0.7 }}>Total paid</div>
+                <div style={{ fontWeight: 700, fontSize: 20 }}>{formatINR(sample.amount)}</div>
+              </div>
+            </div>
+            <div style={{ margin: '14px 0', borderTop: '1px dashed rgba(0,0,0,0.1)' }} />
+            <div>{sample.product}</div>
+            <div style={{ fontSize: 13, opacity: 0.7, marginTop: 4 }}>Sold by {sample.supplier}</div>
+            <div style={{ fontSize: 13, opacity: 0.7 }}>Delivery by {sample.delivery_date}</div>
+          </div>
+          <p style={{ fontSize: 14 }}>You&apos;ll receive updates on WhatsApp at every stage.</p>
+        </>
+      ),
+      cta: { label: 'Track your order', color: '#4338ca' },
+    },
+    review: {
+      subject: 'How was your experience with ' + sample.supplier + '?',
+      body: (
+        <>
+          <p>Namaste {sample.buyer_name.split(' ')[0]},</p>
+          <p>Your <b>{sample.product}</b> was delivered on {sample.delivery_date}. We hope you love it!</p>
+          <div style={{ background: 'linear-gradient(135deg, rgba(251,191,36,0.10), rgba(249,115,22,0.06))', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 16, padding: 20, margin: '18px 0', textAlign: 'center' }}>
+            <div style={{ fontSize: 13, opacity: 0.7, marginBottom: 8 }}>Rate {sample.supplier}</div>
+            <div style={{ fontSize: 28, letterSpacing: 6 }}>★ ★ ★ ★ ★</div>
+            <div style={{ fontSize: 12, opacity: 0.6, marginTop: 8 }}>Your review helps 12,000+ other buyers</div>
+          </div>
+        </>
+      ),
+      cta: { label: 'Leave a review', color: '#e11d48' },
+    },
+    cashback: {
+      subject: `+${formatINR(sample.cashback)} ${sample.tier} cashback added to your wallet`,
+      body: (
+        <>
+          <p>Namaste {sample.buyer_name.split(' ')[0]},</p>
+          <p>Delivery confirmed! We&apos;ve credited <b>{formatINR(sample.cashback)}</b> as {sample.tier} cashback into your BoliBazzar wallet.</p>
+          <div style={{ background: 'linear-gradient(135deg, rgba(16,185,129,0.10), rgba(6,182,212,0.06))', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 16, padding: 20, margin: '18px 0' }}>
+            <div style={{ fontSize: 12, opacity: 0.7 }}>Wallet balance</div>
+            <div style={{ fontWeight: 700, fontSize: 26 }}>{formatINR((sample.cashback || 0) + 2400)}</div>
+            <div style={{ fontSize: 13, opacity: 0.7, marginTop: 6 }}>Use on any future order for instant discount.</div>
+          </div>
+        </>
+      ),
+      cta: { label: 'Open my wallet', color: '#10b981' },
+    },
+  };
+  const active = templates[tab];
+  return (
+    <div className="container mx-auto px-6 py-12">
+      <Badge variant="outline" className="mb-3"><Mail className="w-3 h-3 mr-1" />Brand stationery</Badge>
+      <h1 className="text-4xl font-semibold">Emails that feel premium.</h1>
+      <p className="text-muted-foreground mt-2">Every touchpoint styled with the BoliBazzar logo and colours — auto-sent at each key moment.</p>
+      <div className="mt-6 flex gap-2 flex-wrap">
+        {[['invoice','Order invoice'],['review','Review request'],['cashback','Cashback confirmation']].map(([k,l])=>(
+          <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-full text-sm border transition ${tab===k ? 'bg-gradient-to-r from-indigo-600 to-orange-500 border-0 text-white' : 'border-white/10 hover:border-white/20'}`}>{l}</button>
+        ))}
+      </div>
+      {/* Email preview */}
+      <div className="mt-6 rounded-2xl border border-white/10 overflow-hidden max-w-2xl">
+        <div className="bg-white/5 border-b border-white/10 p-4 flex items-center justify-between gap-3">
+          <div className="text-sm">
+            <div className="text-muted-foreground text-xs">From <span className="text-foreground">hello@bolibazzar.in</span> · to {sample.buyer_email}</div>
+            <div className="font-semibold mt-0.5">{active.subject}</div>
+          </div>
+          <Button size="sm" variant="ghost" onClick={()=>{navigator.clipboard.writeText(active.subject);toast.success('Subject copied')}}><Copy className="w-3.5 h-3.5" /></Button>
+        </div>
+        <div className="bg-white text-slate-900 p-6" style={{color:'#0a0a12'}}>
+          {/* Header with logo */}
+          <div style={{ display:'flex', alignItems:'center', gap:10, borderBottom:'1px solid rgba(0,0,0,0.06)', paddingBottom: 14, marginBottom: 18 }}>
+            <div style={{ width:36, height:36, borderRadius:8, background:'linear-gradient(135deg,#4338ca,#e11d48,#f97316)', display:'grid', placeItems:'center' }}>
+              <svg width="20" height="20" viewBox="0 0 64 64"><path d="M22 14 h12 a10 10 0 0 1 0 18 h-12 z M22 34 h16 a10 10 0 0 1 0 18 h-16 z" fill="#0a0a0f" transform="scale(0.85) translate(4 4)" /></svg>
+            </div>
+            <div style={{ fontWeight:700, fontSize:18 }}>
+              <span style={{ color:'#0a0a12' }}>Boli</span>
+              <span style={{ background:'linear-gradient(90deg,#e11d48,#f97316)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent' }}>Bazzar</span>
+            </div>
+          </div>
+          {active.body}
+          <div style={{ marginTop: 22 }}>
+            <a style={{ display:'inline-block', background:'linear-gradient(135deg,#4338ca,#f97316)', color:'white', padding:'12px 22px', borderRadius:10, textDecoration:'none', fontWeight:600, fontSize:14 }}>{active.cta.label} →</a>
+          </div>
+          <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid rgba(0,0,0,0.06)', fontSize: 11, color: 'rgba(0,0,0,0.5)' }}>
+            You Ask. Sellers Compete. You Win.<br/>© 2025 BoliBazzar Technologies · Made for Bharat
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ============ MAIN APP ============
 function App() {
   const [view, setView] = useState('home');
+  const [showSplash, setShowSplash] = useState(true);
   const [user, setUser] = useState(null);
   const [loginOpen, setLoginOpen] = useState(false);
   const [supplierSignupOpen, setSupplierSignupOpen] = useState(false);
@@ -1407,6 +1579,7 @@ function App() {
 
   return (
     <div>
+      {showSplash && <Splash onDone={() => setShowSplash(false)} />}
       <Script src="https://checkout.razorpay.com/v1/checkout.js" strategy="afterInteractive" />
       <Navbar view={view} setView={(v) => { setView(v); if (v === 'home') { setRequest(null); setOffers([]); } }} user={user} onLogin={() => setLoginOpen(true)} onLogout={() => setUser(null)} onSupplierSignup={() => setSupplierSignupOpen(true)} wallet={wallet} tier={tier} />
 
@@ -1415,6 +1588,7 @@ function App() {
       {view === 'supplier' && (<><SupplierDashboard onSignup={() => setSupplierSignupOpen(true)} user={user} /><Footer /></>)}
       {view === 'my_requests' && user && (<><MyRequests user={user} onOpen={openPastRequest} /><Footer /></>)}
       {view === 'wallet' && user && (<><WalletView user={user} wallet={wallet} tier={tier} refresh={loadWallet} /><Footer /></>)}
+      {view === 'stationery' && (<><StationeryView user={user} /><Footer /></>)}
 
       {requirement && <RequirementPreview requirement={requirement} onConfirm={confirmRequirement} onCancel={() => setRequirement(null)} confirming={confirming} />}
       <LoginModal open={loginOpen} onOpenChange={setLoginOpen} onLogin={setUser} />

@@ -120,7 +120,55 @@ function computeValueScore(offer, requirement) {
   return { value_score: Math.round(total * 100), rationale: reasons.join(' \u00b7 ') };
 }
 
-// --- deterministic offer simulation ---
+// --- Auto-bid matching (supplier rules -> auto-generated offers) ---
+async function runAutoBidMatching(db, request) {
+  const rules = await db.collection('supplier_rules').find({ enabled: true }).toArray();
+  const req = request.requirement;
+  const matches = rules.filter(rule => {
+    if (rule.brand && req.brand && rule.brand.toLowerCase() !== req.brand.toLowerCase()) return false;
+    if (rule.sub_category && rule.sub_category !== 'any' && rule.sub_category !== req.sub_category) return false;
+    if (rule.city && req.location && !req.location.toLowerCase().includes(rule.city.toLowerCase())) return false;
+    // Budget must be at or above rule's minimum acceptable
+    if (rule.min_price && req.budget_inr && req.budget_inr < rule.min_price) return false;
+    return true;
+  });
+  const offers = [];
+  for (const rule of matches) {
+    const supplier = await db.collection('suppliers').findOne({ id: rule.supplier_id });
+    if (!supplier || supplier.status !== 'approved') continue;
+    // Compute auto-bid price
+    const budget = req.budget_inr || rule.min_price || 50000;
+    const discountPct = rule.discount_pct || 5;
+    let price = Math.round((budget * (1 - discountPct / 100)) / 100) * 100;
+    if (rule.min_price) price = Math.max(price, rule.min_price);
+    const offer = {
+      id: uuidv4(), request_id: request.id,
+      supplier_id: supplier.id,
+      supplier_name: supplier.business_name + (supplier.city ? ' - ' + supplier.city : ''),
+      supplier_type: supplier.supplier_type,
+      price_inr: price,
+      delivery_days: rule.delivery_days || 2,
+      delivery_note: rule.delivery_days === 0 ? `Same-day in ${supplier.city}` : (rule.delivery_days || 2) === 1 ? 'Next-day delivery' : `${rule.delivery_days || 2}-day shipping`,
+      warranty: rule.warranty || '1 year manufacturer',
+      rating: supplier.rating || 4.5, reviews: supplier.reviews || 0,
+      distance_km: null,
+      validity_hours: rule.validity_hours || 24,
+      extras: rule.extras || '',
+      message: rule.message || 'Auto-bid via BoliBazaar Rules — best price locked in.',
+      status: 'pending',
+      source: 'auto_bid',
+      auto_bid_rule_id: rule.id,
+      created_at: new Date().toISOString(),
+    };
+    const scored = computeValueScore(offer, req);
+    Object.assign(offer, scored);
+    await db.collection('offers').insertOne(offer);
+    offers.push(offer);
+  }
+  return offers;
+}
+
+// --- Deterministic offer simulation ---
 const SUPPLIER_POOL = [
   { name: 'Croma - Andheri West', type: 'retail_store', rating: 4.6, reviews: 3240, city: 'Mumbai', dist: 2.4 },
   { name: 'Reliance Digital - BKC', type: 'retail_store', rating: 4.5, reviews: 4890, city: 'Mumbai', dist: 5.1 },
@@ -262,8 +310,9 @@ async function route(req, { params }) {
       created_at: new Date().toISOString(),
     };
     await db.collection('requests').insertOne(doc);
-    // Fire-and-forget WhatsApp alerts to matching approved suppliers
+    // Fire-and-forget WhatsApp alerts + auto-bid matching
     notifyMatchingSuppliers(db, doc).catch(e => console.error('whatsapp notify', e));
+    runAutoBidMatching(db, doc).catch(e => console.error('auto-bid', e));
     return ok({ request: doc });
   }
   if (path === '/requests' && method === 'GET') {
@@ -368,16 +417,28 @@ async function route(req, { params }) {
 
   // --- Payments ---
   if (path === '/payments/order' && method === 'POST') {
-    const { offer_id, amount_inr } = await req.json();
+    const { offer_id, amount_inr, buyer_email, wallet_apply_inr } = await req.json();
     if (!offer_id || !amount_inr) return err('offer_id and amount_inr required');
+    // Deduct wallet balance if requested
+    let walletUsed = 0;
+    if (buyer_email && wallet_apply_inr && wallet_apply_inr > 0) {
+      const w = await db.collection('wallets').findOne({ email: buyer_email });
+      if (w && w.balance_inr > 0) {
+        walletUsed = Math.min(w.balance_inr, Number(wallet_apply_inr), Number(amount_inr) - 1);
+      }
+    }
+    const finalAmount = Number(amount_inr) - walletUsed;
     const receipt = 'BB_' + offer_id.slice(0, 8) + '_' + Date.now();
-    const amountPaise = Math.round(Number(amount_inr) * 100);
+    const amountPaise = Math.round(finalAmount * 100);
     try {
       const order = await createRazorpayOrder(amountPaise, receipt);
       const payment = {
         id: uuidv4(),
         offer_id, receipt,
-        amount_inr: Number(amount_inr), amount_paise: amountPaise,
+        buyer_email: buyer_email || null,
+        amount_inr: finalAmount, amount_paise: amountPaise,
+        original_amount_inr: Number(amount_inr),
+        wallet_used_inr: walletUsed,
         razorpay_order_id: order.orderId,
         status: 'created',
         mocked: order.mocked,
@@ -389,6 +450,8 @@ async function route(req, { params }) {
         amount: order.amount, currency: order.currency,
         key_id: process.env.RAZORPAY_KEY_ID || null,
         mocked: order.mocked,
+        wallet_used_inr: walletUsed,
+        final_amount_inr: finalAmount,
       });
     } catch (e) { console.error('order', e); return err('order failed: ' + (e.message || 'unknown'), 500); }
   }
@@ -404,6 +467,20 @@ async function route(req, { params }) {
     await db.collection('payments').updateOne({ razorpay_order_id }, { $set: { status, razorpay_payment_id, razorpay_signature: razorpay_signature || null, verified_at: new Date().toISOString() } });
     if (valid) {
       await db.collection('offers').updateOne({ id: paymentDoc.offer_id }, { $set: { payment_status: 'paid', delivery_status: 'delivered' } });
+      // Wallet accounting: deduct used, credit 2% cashback on original amount
+      if (paymentDoc.buyer_email) {
+        const email = paymentDoc.buyer_email;
+        let w = await db.collection('wallets').findOne({ email });
+        if (!w) { w = { email, balance_inr: 0, transactions: [], created_at: new Date().toISOString() }; await db.collection('wallets').insertOne({ ...w }); }
+        const now = new Date().toISOString();
+        const used = paymentDoc.wallet_used_inr || 0;
+        const cashback = Math.round((paymentDoc.original_amount_inr || paymentDoc.amount_inr) * 0.02);
+        const txs = [];
+        if (used > 0) txs.push({ id: uuidv4(), type: 'debit', amount: used, reason: 'Wallet applied on purchase', offer_id: paymentDoc.offer_id, at: now });
+        txs.push({ id: uuidv4(), type: 'credit', amount: cashback, reason: '2% BoliBazaar cashback', offer_id: paymentDoc.offer_id, at: now });
+        const newBal = (w.balance_inr || 0) - used + cashback;
+        await db.collection('wallets').updateOne({ email }, { $set: { balance_inr: newBal }, $push: { transactions: { $each: txs } } });
+      }
     }
     return ok({ ok: valid, status });
   }
@@ -553,6 +630,73 @@ async function route(req, { params }) {
       hot_categories: hotCategories,
       recent_offers: recent,
     });
+  }
+
+  // --- Supplier Auto-Bid Rules ---
+  if (path === '/supplier/rules' && method === 'POST') {
+    const b = await req.json();
+    if (!b.supplier_email) return err('supplier_email required');
+    const supplier = await db.collection('suppliers').findOne({ email: b.supplier_email });
+    if (!supplier) return err('supplier not found', 404);
+    const rule = {
+      id: uuidv4(),
+      supplier_id: supplier.id,
+      supplier_email: b.supplier_email,
+      name: b.name || 'My auto-bid rule',
+      brand: b.brand || null,
+      sub_category: b.sub_category || 'any',
+      city: b.city || null,
+      min_price: b.min_price ? Number(b.min_price) : null,
+      discount_pct: Number(b.discount_pct) || 5,
+      delivery_days: Number(b.delivery_days) || 2,
+      warranty: b.warranty || '1 year manufacturer',
+      extras: b.extras || '',
+      validity_hours: Number(b.validity_hours) || 24,
+      message: b.message || '',
+      enabled: b.enabled !== false,
+      created_at: new Date().toISOString(),
+    };
+    await db.collection('supplier_rules').insertOne(rule);
+    return ok({ rule });
+  }
+  const rulesMatch = path.match(/^\/supplier\/rules\/(.+)$/);
+  if (rulesMatch && method === 'GET') {
+    const email = decodeURIComponent(rulesMatch[1]);
+    const list = await db.collection('supplier_rules').find({ supplier_email: email }, { projection: { _id: 0 } }).sort({ created_at: -1 }).toArray();
+    return ok({ rules: list });
+  }
+  const ruleDelMatch = path.match(/^\/supplier\/rules\/id\/([^/]+)$/);
+  if (ruleDelMatch && method === 'DELETE') {
+    await db.collection('supplier_rules').deleteOne({ id: ruleDelMatch[1] });
+    return ok({ ok: true });
+  }
+  const ruleToggleMatch = path.match(/^\/supplier\/rules\/id\/([^/]+)\/toggle$/);
+  if (ruleToggleMatch && method === 'POST') {
+    const id = ruleToggleMatch[1];
+    const r = await db.collection('supplier_rules').findOne({ id });
+    if (!r) return err('not found', 404);
+    await db.collection('supplier_rules').updateOne({ id }, { $set: { enabled: !r.enabled } });
+    return ok({ ok: true, enabled: !r.enabled });
+  }
+
+  // --- Buyer Wallet ---
+  const walletMatch = path.match(/^\/wallet\/(.+)$/);
+  if (walletMatch && method === 'GET') {
+    const email = decodeURIComponent(walletMatch[1]);
+    let w = await db.collection('wallets').findOne({ email }, { projection: { _id: 0 } });
+    if (!w) {
+      w = { email, balance_inr: 0, transactions: [], created_at: new Date().toISOString() };
+      await db.collection('wallets').insertOne({ ...w });
+    }
+    return ok({ wallet: w });
+  }
+  if (path === '/wallet/apply' && method === 'POST') {
+    const { email, amount_inr } = await req.json();
+    if (!email) return err('email required');
+    const w = await db.collection('wallets').findOne({ email });
+    if (!w) return err('wallet not found', 404);
+    const applied = Math.max(0, Math.min(w.balance_inr, Number(amount_inr) || 0));
+    return ok({ applicable: applied, balance: w.balance_inr });
   }
 
   return err('route not found: ' + method + ' ' + path, 404);

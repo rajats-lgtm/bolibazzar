@@ -7,8 +7,22 @@ import {
   Sparkles, Send, ShoppingBag, Store, ArrowRight, Check, Star, Truck, Shield, Clock,
   MapPin, TrendingDown, Package, MessageSquare, Loader2, ChevronRight, Award, Percent,
   Bell, Search, User, LogOut, CreditCard, CheckCircle2, X, FileCheck, Building2, ClipboardList,
-  Mic, MicOff, Languages, Timer, BarChart3, Trophy, Zap, TrendingUp, Flame
+  Mic, MicOff, Languages, Timer, BarChart3, Trophy, Zap, TrendingUp, Flame,
+  Volume2, Wallet, Share2, Bot, Plus, Trash2, Power
 } from 'lucide-react';
+
+const LANG_TO_TTS = { en: 'en-IN', hi: 'hi-IN', ta: 'ta-IN', mr: 'mr-IN', bn: 'bn-IN', te: 'te-IN', kn: 'kn-IN', ml: 'ml-IN', gu: 'gu-IN', mixed: 'en-IN' };
+function speak(text, langCode = 'en-IN') {
+  if (typeof window === 'undefined' || !window.speechSynthesis) return;
+  try {
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = langCode;
+    u.rate = 1.0;
+    u.pitch = 1.0;
+    window.speechSynthesis.speak(u);
+  } catch (e) { console.log('TTS failed', e); }
+}
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -252,44 +266,47 @@ function ChatSheet({ offer, user, onClose }) {
 }
 
 // ============ PAYMENT MODAL ============
-function PaymentModal({ offer, user, onClose, onPaid }) {
-  const [step, setStep] = useState('review'); // review | processing | success | fail
+function PaymentModal({ offer, user, wallet, onClose, onPaid, onReloadWallet }) {
+  const [step, setStep] = useState('review');
   const [creating, setCreating] = useState(false);
+  const [useWallet, setUseWallet] = useState(false);
+  const walletBal = wallet?.balance_inr || 0;
+  const walletApply = useWallet ? Math.min(walletBal, Math.max(0, offer.price_inr - 1)) : 0;
+  const finalAmount = offer.price_inr - walletApply;
 
   async function pay() {
     setCreating(true);
-    const r = await api('/payments/order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ offer_id: offer.id, amount_inr: offer.price_inr }) });
+    const r = await api('/payments/order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ offer_id: offer.id, amount_inr: offer.price_inr, buyer_email: user?.email || null, wallet_apply_inr: walletApply }) });
     if (!r.ok) { toast.error(r.error || 'Order creation failed'); setCreating(false); return; }
-
     if (r.mocked || !r.key_id) {
-      // Simulated payment (no Razorpay keys)
       setStep('processing');
       setTimeout(async () => {
         const v = await api('/payments/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ razorpay_order_id: r.order_id, razorpay_payment_id: 'pay_mock_' + Date.now(), razorpay_signature: 'mock' }) });
-        if (v.ok) { setStep('success'); onPaid(); } else setStep('fail');
+        if (v.ok) { setStep('success'); onPaid(); onReloadWallet?.(); } else setStep('fail');
       }, 1600);
-      setCreating(false);
-      return;
+      setCreating(false); return;
     }
-
-    // Real Razorpay checkout
     if (!window.Razorpay) { toast.error('Razorpay script not loaded'); setCreating(false); return; }
     const options = {
-      key: r.key_id,
-      amount: r.amount, currency: r.currency, order_id: r.order_id,
+      key: r.key_id, amount: r.amount, currency: r.currency, order_id: r.order_id,
       name: 'BoliBazaar', description: `${offer.supplier_name} · ${formatINR(offer.price_inr)}`,
       prefill: { name: user?.name || 'Buyer', email: user?.email || '' },
       theme: { color: '#a21caf' },
       handler: async (resp) => {
         setStep('processing');
         const v = await api('/payments/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(resp) });
-        if (v.ok) { setStep('success'); onPaid(); } else setStep('fail');
+        if (v.ok) { setStep('success'); onPaid(); onReloadWallet?.(); } else setStep('fail');
       },
     };
     const rzp = new window.Razorpay(options);
     rzp.on('payment.failed', () => setStep('fail'));
-    rzp.open();
-    setCreating(false);
+    rzp.open(); setCreating(false);
+  }
+
+  function shareOnWhatsApp() {
+    const text = `\u{1F389} Just got an amazing deal on BoliBazaar!\n\n${offer.supplier_name}: ${formatINR(offer.price_inr)}\nDelivery: ${offer.delivery_note}\n${offer.extras ? '\u2728 ' + offer.extras + '\n' : ''}\nTry BoliBazaar - India's AI reverse marketplace where suppliers compete for YOUR business:\n${typeof window !== 'undefined' ? window.location.origin : ''}`;
+    const url = 'https://wa.me/?text=' + encodeURIComponent(text);
+    window.open(url, '_blank');
   }
 
   return (
@@ -304,14 +321,29 @@ function PaymentModal({ offer, user, onClose, onPaid }) {
             <div className="flex justify-between text-sm"><span className="text-muted-foreground">Subtotal</span><span>{formatINR(offer.price_inr)}</span></div>
             <div className="flex justify-between text-sm"><span className="text-muted-foreground">Delivery</span><span className="text-emerald-400">FREE</span></div>
             <div className="flex justify-between text-sm"><span className="text-muted-foreground">Platform fee</span><span className="text-emerald-400">₹0</span></div>
+            {walletApply > 0 && <div className="flex justify-between text-sm"><span className="text-emerald-400">Wallet applied</span><span className="text-emerald-400">−{formatINR(walletApply)}</span></div>}
             <div className="h-px bg-white/10 my-2" />
-            <div className="flex justify-between font-semibold text-lg"><span>Total</span><span>{formatINR(offer.price_inr)}</span></div>
+            <div className="flex justify-between font-semibold text-lg"><span>Total</span><span>{formatINR(finalAmount)}</span></div>
           </div>
+          {user && walletBal > 0 && (
+            <button onClick={() => setUseWallet(v => !v)} className={`mt-3 w-full rounded-xl border p-3 flex items-center justify-between transition ${useWallet ? 'border-emerald-500/50 bg-emerald-500/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.04]'}`}>
+              <div className="flex items-center gap-2">
+                <Wallet className={`w-4 h-4 ${useWallet ? 'text-emerald-400' : 'text-muted-foreground'}`} />
+                <div className="text-left">
+                  <div className="text-sm font-medium">Use BoliBazaar wallet</div>
+                  <div className="text-xs text-muted-foreground">Balance {formatINR(walletBal)}</div>
+                </div>
+              </div>
+              <div className={`h-5 w-9 rounded-full transition ${useWallet ? 'bg-emerald-500' : 'bg-white/10'} relative`}>
+                <div className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${useWallet ? 'left-4' : 'left-0.5'}`} />
+              </div>
+            </button>
+          )}
           <div className="flex items-center gap-2 text-xs text-muted-foreground mt-2">
             <Shield className="w-3.5 h-3.5" />Secured by Razorpay · UPI · Cards · Netbanking · Wallets
           </div>
           <Button onClick={pay} disabled={creating} className="w-full mt-2 bg-gradient-to-br from-fuchsia-500 to-violet-600 h-11">
-            {creating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CreditCard className="w-4 h-4 mr-2" />}Pay {formatINR(offer.price_inr)}
+            {creating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CreditCard className="w-4 h-4 mr-2" />}Pay {formatINR(finalAmount)}
           </Button>
         </>)}
         {step === 'processing' && (
@@ -322,11 +354,19 @@ function PaymentModal({ offer, user, onClose, onPaid }) {
           </div>
         )}
         {step === 'success' && (
-          <div className="py-10 text-center">
+          <div className="py-8 text-center">
             <div className="w-16 h-16 rounded-full bg-emerald-500/20 border border-emerald-500/40 grid place-items-center mx-auto"><Check className="w-8 h-8 text-emerald-400" /></div>
             <div className="mt-4 text-xl font-semibold">Payment successful 🎉</div>
-            <div className="text-sm text-muted-foreground">Your order with {offer.supplier_name} is confirmed. Delivery in {offer.delivery_days === 0 ? 'a few hours' : `${offer.delivery_days} day(s)`}.</div>
-            <Button className="mt-6 w-full" onClick={onClose}>Done</Button>
+            <div className="text-sm text-muted-foreground">Order with {offer.supplier_name} confirmed. Delivery in {offer.delivery_days === 0 ? 'a few hours' : `${offer.delivery_days} day(s)`}.</div>
+            <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs">
+              <Wallet className="w-3 h-3" />+{formatINR(Math.round(offer.price_inr * 0.02))} cashback added to wallet
+            </div>
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <Button variant="outline" className="border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10" onClick={shareOnWhatsApp}>
+                <Share2 className="w-4 h-4 mr-2" />Share deal
+              </Button>
+              <Button onClick={onClose}>Done</Button>
+            </div>
           </div>
         )}
         {step === 'fail' && (
@@ -429,14 +469,27 @@ function Hero({ onSubmit, loading }) {
 }
 
 function RequirementPreview({ requirement, onConfirm, onCancel, confirming }) {
+  useEffect(() => {
+    if (requirement?.summary) {
+      const lang = LANG_TO_TTS[requirement.detected_language] || 'en-IN';
+      speak(requirement.summary, lang);
+    }
+    return () => { if (typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel(); };
+  }, [requirement?.summary, requirement?.detected_language]);
   if (!requirement) return null;
   const rows = [['Product',requirement.product],['Brand',requirement.brand],['Model',requirement.model],['Storage',requirement.storage],['RAM',requirement.ram],['Colour',requirement.colour],['Size',requirement.size],['Budget',requirement.budget_inr ? formatINR(requirement.budget_inr) : null],['Location',requirement.location],['Delivery',requirement.delivery_preference],['Quantity',requirement.quantity]].filter(([,v]) => v != null && v !== '');
+  const lang = LANG_TO_TTS[requirement.detected_language] || 'en-IN';
   return (
     <Dialog open onOpenChange={o => !o && onCancel()}>
       <DialogContent className="max-w-2xl bg-background/95 backdrop-blur border-white/10">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-2xl"><Sparkles className="w-5 h-5 text-fuchsia-400" />AI understood your requirement</DialogTitle>
-          <DialogDescription>{requirement.summary}</DialogDescription>
+          <DialogDescription className="flex items-center gap-2">
+            <span>{requirement.summary}</span>
+            <button onClick={() => speak(requirement.summary, lang)} className="text-fuchsia-400 hover:text-fuchsia-300 shrink-0" title="Play again">
+              <Volume2 className="w-4 h-4" />
+            </button>
+          </DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-2 gap-3 my-4">
           {rows.map(([k,v]) => (
@@ -735,7 +788,7 @@ function FAQ() {
 }
 function Footer() { return (<footer className="border-t border-white/10 mt-16"><div className="container mx-auto px-6 py-10 flex flex-col md:flex-row items-center justify-between gap-4"><div className="flex items-center gap-2"><div className="h-8 w-8 rounded-lg bg-gradient-to-br from-fuchsia-500 to-violet-600 grid place-items-center"><Sparkles className="w-4 h-4" /></div><div className="font-semibold">BoliBazaar</div><span className="text-muted-foreground text-sm">· India\'s AI Reverse Marketplace</span></div><div className="text-xs text-muted-foreground">© 2025 BoliBazaar Technologies · Made for Bharat</div></div></footer>); }
 
-function Navbar({ view, setView, user, onLogin, onLogout, onSupplierSignup }) {
+function Navbar({ view, setView, user, onLogin, onLogout, onSupplierSignup, wallet }) {
   return (
     <header className="sticky top-0 z-40 backdrop-blur-xl bg-background/60 border-b border-white/5">
       <div className="container mx-auto px-6 h-16 flex items-center justify-between">
@@ -746,6 +799,11 @@ function Navbar({ view, setView, user, onLogin, onLogout, onSupplierSignup }) {
           <Button variant={view === 'supplier' ? 'secondary' : 'ghost'} size="sm" onClick={() => setView('supplier')}><Store className="w-4 h-4 mr-2" />Supplier</Button>
         </nav>
         <div className="flex items-center gap-2">
+          {user && wallet && wallet.balance_inr > 0 && (
+            <button onClick={() => setView('wallet')} className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-sm hover:bg-emerald-500/20 transition">
+              <Wallet className="w-4 h-4" />{formatINR(wallet.balance_inr)}
+            </button>
+          )}
           <Button variant="ghost" size="sm" onClick={onSupplierSignup} className="hidden md:inline-flex"><Building2 className="w-4 h-4 mr-2" />Sell on BoliBazaar</Button>
           {user ? (
             <DropdownMenu>
@@ -759,6 +817,7 @@ function Navbar({ view, setView, user, onLogin, onLogout, onSupplierSignup }) {
                 <DropdownMenuLabel><div>{user.name}</div><div className="text-xs text-muted-foreground font-normal">{user.email}</div></DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => setView('my_requests')}><ClipboardList className="w-4 h-4 mr-2" />My requests</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setView('wallet')}><Wallet className="w-4 h-4 mr-2" />Wallet <span className="ml-auto text-xs text-emerald-400">{formatINR(wallet?.balance_inr || 0)}</span></DropdownMenuItem>
                 <DropdownMenuItem onClick={onLogout}><LogOut className="w-4 h-4 mr-2" />Sign out</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -815,6 +874,7 @@ function SupplierDashboard({ onSignup, user }) {
       </div>
 
       <SupplierAnalytics email={user?.email} />
+      <AutoBidRulesPanel email={user?.email} />
 
       {loading && <div className="text-muted-foreground">Loading...</div>}
       <div className="grid gap-3">
@@ -904,6 +964,127 @@ function ReviewModal({ offer, user, onClose, onSubmitted }) {
   );
 }
 
+// ============ WALLET VIEW ============
+function WalletView({ user, wallet, refresh }) {
+  useEffect(() => { refresh?.(); }, []);
+  const tx = wallet?.transactions || [];
+  return (
+    <div className="container mx-auto px-6 py-12 max-w-2xl">
+      <Badge variant="outline" className="mb-3"><Wallet className="w-3 h-3 mr-1" />Your wallet</Badge>
+      <h1 className="text-4xl font-semibold">BoliBazaar wallet</h1>
+      <p className="text-muted-foreground mt-2">Earn 2% cashback on every purchase. Apply on any future order.</p>
+      <div className="mt-6 rounded-3xl border border-emerald-500/30 bg-gradient-to-br from-emerald-500/[0.08] to-cyan-500/[0.04] p-8">
+        <div className="text-sm text-emerald-300/80">Available balance</div>
+        <div className="text-5xl font-bold mt-1">{formatINR(wallet?.balance_inr || 0)}</div>
+        <div className="mt-4 text-sm text-muted-foreground">{tx.length} transaction{tx.length === 1 ? '' : 's'} · Cashback credited on delivery</div>
+      </div>
+      <div className="mt-8">
+        <div className="text-xs uppercase tracking-wider text-muted-foreground mb-3">Recent activity</div>
+        {tx.length === 0 && <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-8 text-center text-muted-foreground text-sm">No transactions yet. Complete your first order to earn cashback.</div>}
+        <div className="space-y-2">
+          {tx.slice().reverse().map(t => (
+            <div key={t.id} className="rounded-xl border border-white/10 bg-white/[0.02] p-3 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className={`h-9 w-9 rounded-full grid place-items-center ${t.type === 'credit' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}>
+                  {t.type === 'credit' ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                </div>
+                <div>
+                  <div className="text-sm font-medium">{t.reason}</div>
+                  <div className="text-xs text-muted-foreground">{new Date(t.at).toLocaleString('en-IN')}</div>
+                </div>
+              </div>
+              <div className={`font-semibold ${t.type === 'credit' ? 'text-emerald-400' : 'text-red-400'}`}>{t.type === 'credit' ? '+' : '−'}{formatINR(t.amount)}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============ AUTO-BID RULES PANEL (in supplier dashboard) ============
+function AutoBidRulesPanel({ email }) {
+  const [rules, setRules] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [emailInput, setEmailInput] = useState(email || 'test@apple.in');
+  const [active, setActive] = useState(email || 'test@apple.in');
+  const [f, setF] = useState({ name: 'Apple smartphones auto-bid', brand: 'Apple', sub_category: 'smartphone', discount_pct: '5', delivery_days: '1', warranty: '1 year manufacturer', extras: 'Free case', validity_hours: '24', message: 'Ready to dispatch today!' });
+  async function load() { setLoading(true); const r = await api(`/supplier/rules/${encodeURIComponent(active)}`); setRules(r.rules || []); setLoading(false); }
+  useEffect(() => { load(); }, [active]);
+  async function create() {
+    setCreating(true);
+    const r = await api('/supplier/rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ supplier_email: active, ...f }) });
+    if (r.ok) { toast.success('Auto-bid rule live! You will auto-offer on matching requests.'); load(); }
+    else toast.error(r.error || 'Failed. Make sure supplier is registered.');
+    setCreating(false);
+  }
+  async function toggle(id) { await api(`/supplier/rules/id/${id}/toggle`, { method: 'POST' }); load(); }
+  async function del(id) { await api(`/supplier/rules/id/${id}`, { method: 'DELETE' }); load(); toast.success('Rule deleted'); }
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5 mb-6">
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+        <div className="flex items-center gap-3">
+          <Bot className="w-5 h-5 text-fuchsia-400" />
+          <div>
+            <div className="font-semibold">Auto-bid rules</div>
+            <div className="text-xs text-muted-foreground">Set price rules — we&apos;ll auto-submit offers when matching requests drop</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Input value={emailInput} onChange={e => setEmailInput(e.target.value)} placeholder="your supplier email" className="w-56 h-9" />
+          <Button size="sm" variant="outline" onClick={() => setActive(emailInput)}>Load</Button>
+        </div>
+      </div>
+      {loading ? <div className="text-sm text-muted-foreground">Loading...</div> : (
+        <div className="space-y-2 mb-4">
+          {rules.length === 0 && <div className="text-sm text-muted-foreground">No rules yet. Create one below to start auto-bidding.</div>}
+          {rules.map(r => (
+            <div key={r.id} className={`rounded-xl border p-3 flex items-center justify-between gap-3 flex-wrap ${r.enabled ? 'border-emerald-500/30 bg-emerald-500/[0.03]' : 'border-white/10 bg-white/[0.02] opacity-70'}`}>
+              <div className="flex-1 min-w-[200px]">
+                <div className="font-medium flex items-center gap-2">{r.name} {r.enabled ? <Badge className="bg-emerald-500/20 text-emerald-300 border-0 text-[10px]">ACTIVE</Badge> : <Badge variant="outline" className="text-[10px]">PAUSED</Badge>}</div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  {r.brand && <span>{r.brand} · </span>}
+                  {r.sub_category !== 'any' && <span className="capitalize">{r.sub_category.replace('_', ' ')} · </span>}
+                  Bid <span className="text-fuchsia-300">{r.discount_pct}% below budget</span> · {r.delivery_days === 0 ? 'Same-day' : `${r.delivery_days}d`} delivery
+                </div>
+              </div>
+              <div className="flex gap-1">
+                <Button size="sm" variant="ghost" onClick={() => toggle(r.id)}><Power className="w-4 h-4" /></Button>
+                <Button size="sm" variant="ghost" onClick={() => del(r.id)}><Trash2 className="w-4 h-4 text-red-400" /></Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="rounded-xl border border-fuchsia-500/20 bg-fuchsia-500/[0.03] p-3">
+        <div className="text-xs font-medium mb-2 text-fuchsia-200 flex items-center gap-1.5"><Plus className="w-3.5 h-3.5" />New rule</div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <Input value={f.name} onChange={e => setF({...f, name: e.target.value})} placeholder="Rule name" className="col-span-2 h-9" />
+          <Input value={f.brand} onChange={e => setF({...f, brand: e.target.value})} placeholder="Brand (e.g. Apple)" className="h-9" />
+          <select value={f.sub_category} onChange={e => setF({...f, sub_category: e.target.value})} className="h-9 rounded-md border border-input bg-transparent px-3 text-sm">
+            <option value="any">Any category</option>
+            <option value="smartphone">Smartphone</option>
+            <option value="laptop">Laptop</option>
+            <option value="tv">TV</option>
+            <option value="tablet">Tablet</option>
+            <option value="gaming_console">Gaming console</option>
+            <option value="smartwatch">Smartwatch</option>
+            <option value="headphones">Headphones</option>
+          </select>
+          <div><label className="text-[10px] text-muted-foreground">% below budget</label><Input type="number" value={f.discount_pct} onChange={e => setF({...f, discount_pct: e.target.value})} className="h-9" /></div>
+          <div><label className="text-[10px] text-muted-foreground">Delivery days</label><Input type="number" value={f.delivery_days} onChange={e => setF({...f, delivery_days: e.target.value})} className="h-9" /></div>
+          <Input value={f.extras} onChange={e => setF({...f, extras: e.target.value})} placeholder="Freebies/extras" className="col-span-2 h-9" />
+          <Input value={f.message} onChange={e => setF({...f, message: e.target.value})} placeholder="Auto message to buyer" className="col-span-4 h-9" />
+        </div>
+        <Button size="sm" onClick={create} disabled={creating} className="mt-3 bg-gradient-to-br from-fuchsia-500 to-violet-600">
+          {creating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Bot className="w-4 h-4 mr-2" />}Create auto-bid rule
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // ============ MAIN APP ============
 function App() {
   const [view, setView] = useState('home');
@@ -920,6 +1101,14 @@ function App() {
   const [chatOffer, setChatOffer] = useState(null);
   const [payOffer, setPayOffer] = useState(null);
   const [reviewOffer, setReviewOffer] = useState(null);
+  const [wallet, setWallet] = useState(null);
+
+  async function loadWallet() {
+    if (!user?.email) { setWallet(null); return; }
+    const r = await api(`/wallet/${encodeURIComponent(user.email)}`);
+    if (r.ok) setWallet(r.wallet);
+  }
+  useEffect(() => { loadWallet(); }, [user?.email]);
 
   useEffect(() => { const s = localStorage.getItem('bb_user'); if (s) try { setUser(JSON.parse(s)); } catch {} }, []);
   useEffect(() => { user ? localStorage.setItem('bb_user', JSON.stringify(user)) : localStorage.removeItem('bb_user'); }, [user]);
@@ -963,18 +1152,19 @@ function App() {
   return (
     <div>
       <Script src="https://checkout.razorpay.com/v1/checkout.js" strategy="afterInteractive" />
-      <Navbar view={view} setView={(v) => { setView(v); if (v === 'home') { setRequest(null); setOffers([]); } }} user={user} onLogin={() => setLoginOpen(true)} onLogout={() => setUser(null)} onSupplierSignup={() => setSupplierSignupOpen(true)} />
+      <Navbar view={view} setView={(v) => { setView(v); if (v === 'home') { setRequest(null); setOffers([]); } }} user={user} onLogin={() => setLoginOpen(true)} onLogout={() => setUser(null)} onSupplierSignup={() => setSupplierSignupOpen(true)} wallet={wallet} />
 
       {view === 'home' && !request && (<><Hero onSubmit={handleExtract} loading={loading} /><FeaturedElectronics /><HowItWorks /><FAQ /><Footer /></>)}
       {view === 'offers' && request && (<><OffersView request={request} offers={offers} onAccept={acceptOffer} onChat={setChatOffer} refreshing={refreshing} onTick={(newOffers) => setOffers(newOffers)} /><Footer /></>)}
       {view === 'supplier' && (<><SupplierDashboard onSignup={() => setSupplierSignupOpen(true)} user={user} /><Footer /></>)}
       {view === 'my_requests' && user && (<><MyRequests user={user} onOpen={openPastRequest} /><Footer /></>)}
+      {view === 'wallet' && user && (<><WalletView user={user} wallet={wallet} refresh={loadWallet} /><Footer /></>)}
 
       {requirement && <RequirementPreview requirement={requirement} onConfirm={confirmRequirement} onCancel={() => setRequirement(null)} confirming={confirming} />}
       <LoginModal open={loginOpen} onOpenChange={setLoginOpen} onLogin={setUser} />
       <SupplierSignupModal open={supplierSignupOpen} onOpenChange={setSupplierSignupOpen} onDone={() => {}} />
       {chatOffer && <ChatSheet offer={chatOffer} user={user} onClose={() => setChatOffer(null)} />}
-      {payOffer && <PaymentModal offer={payOffer} user={user} onClose={() => setPayOffer(null)} onPaid={() => { onPaid(); setPayOffer(null); }} />}
+      {payOffer && <PaymentModal offer={payOffer} user={user} wallet={wallet} onReloadWallet={loadWallet} onClose={() => setPayOffer(null)} onPaid={() => { onPaid(); setPayOffer(null); }} />}
       {reviewOffer && <ReviewModal offer={reviewOffer} user={user} onClose={() => setReviewOffer(null)} onSubmitted={() => setReviewOffer(null)} />}
     </div>
   );

@@ -120,6 +120,26 @@ function computeValueScore(offer, requirement) {
   return { value_score: Math.round(total * 100), rationale: reasons.join(' \u00b7 ') };
 }
 
+// --- Push notify buyer helper ---
+async function pushNotifyBuyer(db, request, offer) {
+  if (!request?.buyer_email) return;
+  const tokens = await db.collection('push_tokens').find({ email: request.buyer_email }).toArray();
+  if (!tokens.length) return;
+  const messages = tokens.map(t => ({
+    to: t.expo_token, sound: 'default',
+    title: '🔔 New offer on BoliBazzar',
+    body: `${offer.supplier_name}: ₹${offer.price_inr.toLocaleString('en-IN')} — ${offer.delivery_note}`,
+    data: { type: 'new_offer', request_id: request.id, offer_id: offer.id },
+  }));
+  try {
+    await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(messages),
+    });
+  } catch (e) { console.error('push', e); }
+}
+
 // --- Auto-bid matching (supplier rules -> auto-generated offers) ---
 async function runAutoBidMatching(db, request) {
   const rules = await db.collection('supplier_rules').find({ enabled: true }).toArray();
@@ -857,6 +877,41 @@ async function route(req, { params }) {
       accepted: offers.filter(o => o.status === 'accepted').length,
       avg_rating: reviews.length ? Math.round(reviews.reduce((s, r) => s + r.rating, 0) / reviews.length * 10) / 10 : supplier.rating,
     }});
+  }
+
+  // --- Admin allowlist verify ---
+  if (path === '/admin/verify' && method === 'POST') {
+    const { email } = await req.json();
+    const list = (process.env.ADMIN_EMAILS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    const isAdmin = !!email && list.includes(email.toLowerCase());
+    return ok({ is_admin: isAdmin });
+  }
+
+  // --- Push notifications ---
+  if (path === '/push/register' && method === 'POST') {
+    const { email, expo_token, platform } = await req.json();
+    if (!expo_token) return err('expo_token required');
+    await db.collection('push_tokens').updateOne(
+      { expo_token },
+      { $set: { email: email || null, expo_token, platform: platform || 'ios', updated_at: new Date().toISOString() } },
+      { upsert: true }
+    );
+    return ok({ ok: true });
+  }
+  if (path === '/push/notify' && method === 'POST') {
+    const { email, title, body: msgBody, data } = await req.json();
+    const tokens = await db.collection('push_tokens').find({ email }).toArray();
+    if (!tokens.length) return ok({ ok: true, sent: 0 });
+    const messages = tokens.map(t => ({ to: t.expo_token, sound: 'default', title, body: msgBody, data: data || {} }));
+    try {
+      const r = await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(messages),
+      });
+      const j = await r.json();
+      return ok({ ok: true, sent: tokens.length, response: j });
+    } catch (e) { return err('push failed: ' + e.message, 500); }
   }
 
   return err('route not found: ' + method + ' ' + path, 404);

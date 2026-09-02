@@ -1,83 +1,64 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# IDE and editors
-.idea/
-.vscode/
+# .gitignore
 
 # Dependencies
 node_modules/
-/node_modules
-/.pnp
+**/node_modules/
+.pnp
 .pnp.js
-.yarn/install-state.gz
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
 
 # Testing
-/coverage
+coverage/
 
 # Next.js
-/.next/
-/out/
-next-env.d.ts
-*.tsbuildinfo
-
-# Production builds
-/build
+.next/
+out/
+build/
 dist/
-dist
 
-# Environment files (comprehensive coverage)
-*token.json*
-*credentials.json*
+# Expo
+.expo/
+.expo-shared/
+web-build/
 
-# Logs and debug files
+# Production
+/build
+
+# Misc
+.DS_Store
+*.pem
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
-dump.rdb
 
-# System files
-.DS_Store
-*.pem
+# Env
+.env*.local
+# Keep root .env with test keys for dev but exclude anything sensitive
 
-# Python
-__pycache__/
-*pyc*
-venv/
-.venv/
-
-# Development tools
-chainlit.md
-.chainlit
-.ipynb_checkpoints/
-.ac
-
-# Deployment
+# Vercel
 .vercel
 
-# Data and databases
-agenthub/agents/youtube/db
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
 
-# Archive files and large assets
-**/*.zip
-**/*.tar.gz
-**/*.tar
-**/*.tgz
-*.pack
-*.deb
-*.dylib
+# iOS / Android signing
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+google-services.json
+play-service-account.json
 
-# Build caches
-.cache/
+# Editor
+.vscode/
+.idea/
+*.swp
 
-memory/test_credentials.md
-
-# Mobile development
-android-sdk/node_modules/@next/swc-linux-arm64-musl/next-swc.linux-arm64-musl.node
-node_modules/@next/swc-linux-arm64-gnu/next-swc.linux-arm64-gnu.node
+# Emergent tooling
+test_result.md
+yarn.lock.bak
 node_modules/@next/swc-linux-arm64-musl/next-swc.linux-arm64-musl.node
+node_modules/@next/swc-linux-arm64-gnu/next-swc.linux-arm64-gnu.node

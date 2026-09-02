@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Script from 'next/script';
+import confetti from 'canvas-confetti';
 import {
   Sparkles, Send, ShoppingBag, Store, ArrowRight, Check, Star, Truck, Shield, Clock,
   MapPin, TrendingDown, Package, MessageSquare, Loader2, ChevronRight, Award, Percent,
@@ -86,10 +87,11 @@ function BoliBazzarLogo({ size = 32, showWordmark = false, className = '' }) {
   );
 }
 
-// ============ SPLASH ============
+// ============ SPLASH (first-visit only) ============
 function Splash({ onDone }) {
   const [fading, setFading] = useState(false);
   useEffect(() => {
+    try { localStorage.setItem('bb_splash_seen', '1'); } catch {}
     const t1 = setTimeout(() => setFading(true), 1400);
     const t2 = setTimeout(onDone, 1900);
     return () => { clearTimeout(t1); clearTimeout(t2); };
@@ -351,6 +353,40 @@ function ChatSheet({ offer, user, onClose }) {
   );
 }
 
+// ============ SUCCESS CELEBRATION (confetti) ============
+function SuccessCelebration({ offer, tier, shareOnWhatsApp, onClose }) {
+  useEffect(() => {
+    const colors = ['#4338ca', '#e11d48', '#f97316', '#a21caf', '#22d3ee', '#f59e0b'];
+    // Big burst
+    confetti({ particleCount: 90, spread: 70, origin: { y: 0.55 }, colors });
+    // Left + right cannons
+    setTimeout(() => {
+      confetti({ particleCount: 60, angle: 60, spread: 55, origin: { x: 0, y: 0.7 }, colors });
+      confetti({ particleCount: 60, angle: 120, spread: 55, origin: { x: 1, y: 0.7 }, colors });
+    }, 250);
+    // Trailing sparkles
+    setTimeout(() => confetti({ particleCount: 40, startVelocity: 25, spread: 360, ticks: 60, gravity: 0.5, origin: { y: 0.4 }, colors, shapes: ['circle'], scalar: 0.7 }), 800);
+  }, []);
+  return (
+    <div className="py-8 text-center">
+      <div className="w-16 h-16 rounded-full bg-gradient-to-br from-indigo-500/20 to-orange-500/20 border border-fuchsia-500/40 grid place-items-center mx-auto shadow-2xl shadow-fuchsia-500/20">
+        <Check className="w-8 h-8 text-emerald-400" />
+      </div>
+      <div className="mt-4 text-xl font-semibold">Payment successful 🎉</div>
+      <div className="text-sm text-muted-foreground">Order with {offer.supplier_name} confirmed. Delivery in {offer.delivery_days === 0 ? 'a few hours' : `${offer.delivery_days} day(s)`}.</div>
+      <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs">
+        <Wallet className="w-3 h-3" />+{formatINR(Math.round(offer.price_inr * ((tier?.cashback_pct || 2) / 100)))} {tier?.label || 'Silver'} cashback added to wallet
+      </div>
+      <div className="mt-5 grid grid-cols-2 gap-2">
+        <Button variant="outline" className="border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10" onClick={shareOnWhatsApp}>
+          <Share2 className="w-4 h-4 mr-2" />Share deal
+        </Button>
+        <Button onClick={onClose}>Done</Button>
+      </div>
+    </div>
+  );
+}
+
 // ============ PAYMENT MODAL ============
 function PaymentModal({ offer, user, wallet, tier, onClose, onPaid, onReloadWallet }) {
   const [step, setStep] = useState('review');
@@ -440,20 +476,7 @@ function PaymentModal({ offer, user, wallet, tier, onClose, onPaid, onReloadWall
           </div>
         )}
         {step === 'success' && (
-          <div className="py-8 text-center">
-            <div className="w-16 h-16 rounded-full bg-emerald-500/20 border border-emerald-500/40 grid place-items-center mx-auto"><Check className="w-8 h-8 text-emerald-400" /></div>
-            <div className="mt-4 text-xl font-semibold">Payment successful 🎉</div>
-            <div className="text-sm text-muted-foreground">Order with {offer.supplier_name} confirmed. Delivery in {offer.delivery_days === 0 ? 'a few hours' : `${offer.delivery_days} day(s)`}.</div>
-            <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs">
-              <Wallet className="w-3 h-3" />+{formatINR(Math.round(offer.price_inr * ((tier?.cashback_pct || 2) / 100)))} {tier?.label || 'Silver'} cashback added to wallet
-            </div>
-            <div className="mt-5 grid grid-cols-2 gap-2">
-              <Button variant="outline" className="border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10" onClick={shareOnWhatsApp}>
-                <Share2 className="w-4 h-4 mr-2" />Share deal
-              </Button>
-              <Button onClick={onClose}>Done</Button>
-            </div>
-          </div>
+          <SuccessCelebration offer={offer} tier={tier} shareOnWhatsApp={shareOnWhatsApp} onClose={onClose} />
         )}
         {step === 'fail' && (
           <div className="py-10 text-center">
@@ -969,11 +992,19 @@ function SupplierDashboard({ onSignup, user }) {
   async function load() { setLoading(true); const r = await api('/requests'); setRequests(r.requests || []); setLoading(false); }
   useEffect(() => { load(); }, []);
   async function submitOffer() { if (!selected) return; setSubmitting(true); const r = await api(`/requests/${selected.id}/offers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) }); if (r.ok) { toast.success('Offer sent to buyer'); setSelected(null); } else toast.error('Failed'); setSubmitting(false); }
+  function openMyStore() {
+    const email = user?.email || 'test@apple.in';
+    const url = `${window.location.origin}/?store=${encodeURIComponent(email)}`;
+    window.location.href = url;
+  }
   return (
     <div className="container mx-auto px-6 py-12">
       <div className="flex items-start justify-between gap-4 flex-wrap mb-8">
         <div><Badge variant="outline" className="mb-3"><Store className="w-3 h-3 mr-1" />Supplier dashboard</Badge><h1 className="text-4xl font-semibold">Incoming buyer requests</h1><p className="text-muted-foreground mt-2">Live requirements from verified buyers. Submit your best offer to win.</p></div>
-        <Button onClick={onSignup} variant="outline" className="border-fuchsia-500/40"><Building2 className="w-4 h-4 mr-2" />Register your business</Button>
+        <div className="flex gap-2">
+          <Button onClick={openMyStore} variant="outline" className="border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/10"><Share2 className="w-4 h-4 mr-2" />Preview my store</Button>
+          <Button onClick={onSignup} variant="outline" className="border-fuchsia-500/40"><Building2 className="w-4 h-4 mr-2" />Register business</Button>
+        </div>
       </div>
 
       <SupplierAnalytics email={user?.email} />
@@ -1388,6 +1419,151 @@ function TierBadge({ tier, small }) {
   );
 }
 
+// ============ BRAND STORE (public supplier storefront) ============
+function BrandStore({ slug, onClose }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => { (async () => { const r = await api(`/store/${encodeURIComponent(slug)}`); if (r.ok) setData(r); setLoading(false); })(); }, [slug]);
+  function copyLink() {
+    const url = `${window.location.origin}/?store=${encodeURIComponent(slug)}`;
+    navigator.clipboard.writeText(url);
+    toast.success('Store link copied — share with buyers');
+  }
+  function shareWA() {
+    const url = `${window.location.origin}/?store=${encodeURIComponent(slug)}`;
+    const text = `Check out ${data?.supplier?.business_name || 'my store'} on BoliBazzar — verified electronics supplier: ${url}`;
+    window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank');
+  }
+  if (loading) return <div className="container mx-auto px-6 py-24 text-center text-muted-foreground">Loading store...</div>;
+  if (!data) return (
+    <div className="container mx-auto px-6 py-24 text-center">
+      <div className="text-2xl font-semibold">Store not found</div>
+      <Button className="mt-4" onClick={onClose}>Back to BoliBazzar</Button>
+    </div>
+  );
+  const s = data.supplier;
+  const stats = data.stats;
+  const brands = s.brand_authorisations || [];
+  return (
+    <div>
+      {/* Hero */}
+      <section className="relative overflow-hidden">
+        <div className="pointer-events-none absolute inset-0 -z-10">
+          <div className="absolute -top-40 left-1/2 -translate-x-1/2 h-[500px] w-[800px] rounded-full bg-gradient-to-br from-indigo-500/25 via-fuchsia-500/15 to-orange-500/20 blur-3xl" />
+        </div>
+        <div className="container mx-auto px-6 pt-16 pb-10">
+          <button onClick={onClose} className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mb-6"><ChevronRight className="w-3.5 h-3.5 rotate-180" />Back to marketplace</button>
+          <div className="flex items-start justify-between gap-6 flex-wrap">
+            <div className="flex items-start gap-4">
+              <div className="h-20 w-20 rounded-2xl bg-gradient-to-br from-indigo-600 via-fuchsia-500 to-orange-500 grid place-items-center shadow-2xl shadow-fuchsia-500/30">
+                <Store className="w-10 h-10 text-white" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h1 className="text-3xl md:text-4xl font-bold tracking-tight">{s.business_name}</h1>
+                  {s.gst_valid && <Badge className="bg-emerald-500/15 text-emerald-300 border-emerald-500/30"><FileCheck className="w-3 h-3 mr-1" />GST verified</Badge>}
+                </div>
+                <div className="mt-2 flex items-center gap-3 text-sm text-muted-foreground flex-wrap">
+                  <span className="capitalize">{(s.supplier_type || '').replace('_', ' ')}</span>
+                  {s.city && <><span>·</span><span className="flex items-center gap-1"><MapPin className="w-3 h-3" />{s.city}</span></>}
+                  <span>·</span><span className="flex items-center gap-1"><Star className="w-3.5 h-3.5 fill-yellow-400 text-yellow-400" />{stats.avg_rating} ({data.reviews.length} review{data.reviews.length === 1 ? '' : 's'})</span>
+                </div>
+                {brands.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {brands.slice(0, 6).map(b => <Badge key={b} variant="outline" className="text-xs">{b}</Badge>)}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={copyLink}><Copy className="w-4 h-4 mr-2" />Copy link</Button>
+              <Button onClick={shareWA} className="bg-gradient-to-br from-emerald-500 to-emerald-600"><Share2 className="w-4 h-4 mr-2" />Share on WhatsApp</Button>
+            </div>
+          </div>
+
+          {/* Stats */}
+          <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-3 max-w-2xl">
+            <StatCard icon={<Package className="w-4 h-4 text-cyan-400" />} label="Offers made" value={stats.total_offers} />
+            <StatCard icon={<Trophy className="w-4 h-4 text-amber-400" />} label="Deals won" value={stats.accepted} />
+            <StatCard icon={<Star className="w-4 h-4 text-yellow-400" />} label="Avg rating" value={stats.avg_rating} />
+            <StatCard icon={<Award className="w-4 h-4 text-fuchsia-400" />} label="Brands" value={brands.length} />
+          </div>
+        </div>
+      </section>
+
+      {/* Capabilities (auto-bid rules) */}
+      {data.rules.length > 0 && (
+        <section className="container mx-auto px-6 py-8">
+          <div className="text-xs uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-2"><Bot className="w-3.5 h-3.5" />Instant-quote capabilities</div>
+          <div className="grid md:grid-cols-2 gap-3">
+            {data.rules.map(r => (
+              <div key={r.id} className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+                <div className="font-medium">{r.name}</div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  {r.brand && <span>{r.brand} · </span>}
+                  {r.sub_category !== 'any' && <span className="capitalize">{r.sub_category.replace('_', ' ')} · </span>}
+                  Auto-bids <span className="text-fuchsia-300">{r.discount_pct}% below budget</span> · {r.delivery_days === 0 ? 'Same-day' : `${r.delivery_days}d`} delivery
+                </div>
+                {r.extras && <div className="mt-2 text-xs text-emerald-300">✨ {r.extras}</div>}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Recent offers */}
+      <section className="container mx-auto px-6 py-8">
+        <div className="text-xs uppercase tracking-wider text-muted-foreground mb-3">Recent quotes</div>
+        {data.offers.length === 0 ? (
+          <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-8 text-center text-sm text-muted-foreground">No quotes yet. Send them your requirement to get one!</div>
+        ) : (
+          <div className="grid gap-2">
+            {data.offers.slice(0, 6).map(o => (
+              <div key={o.id} className="rounded-xl border border-white/10 bg-white/[0.02] p-3 flex items-center justify-between flex-wrap gap-2">
+                <div className="text-sm">
+                  <span className="font-medium">{formatINR(o.price_inr)}</span>
+                  <span className="text-muted-foreground text-xs ml-2">· {o.delivery_days === 0 ? 'Same-day' : `${o.delivery_days}d`} · {o.warranty}</span>
+                </div>
+                <Badge variant="outline" className="text-[10px] capitalize">{o.status}</Badge>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Reviews */}
+      {data.reviews.length > 0 && (
+        <section className="container mx-auto px-6 py-8">
+          <div className="text-xs uppercase tracking-wider text-muted-foreground mb-3">What buyers say</div>
+          <div className="grid md:grid-cols-2 gap-3">
+            {data.reviews.slice(0, 4).map(r => (
+              <div key={r.id} className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+                <div className="flex items-center gap-1 mb-2">
+                  {[...Array(5)].map((_,i) => <Star key={i} className={`w-3.5 h-3.5 ${i < r.rating ? 'fill-yellow-400 text-yellow-400' : 'text-white/20'}`} />)}
+                </div>
+                {r.title && <div className="font-medium text-sm">{r.title}</div>}
+                {r.comment && <div className="text-sm text-muted-foreground mt-1">{r.comment}</div>}
+                <div className="text-xs text-muted-foreground mt-2">— {r.buyer_name}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* CTA */}
+      <section className="container mx-auto px-6 py-12">
+        <div className="rounded-3xl border border-indigo-500/30 bg-gradient-to-br from-indigo-500/[0.08] via-fuchsia-500/[0.06] to-orange-500/[0.06] p-8 text-center">
+          <h2 className="text-2xl md:text-3xl font-semibold">Want a quote from {s.business_name.split(' ')[0]}?</h2>
+          <p className="text-muted-foreground mt-2">Post your requirement on BoliBazzar and they&apos;ll compete for your order.</p>
+          <Button className="mt-4 bg-gradient-to-br from-indigo-600 to-orange-500" onClick={onClose}>
+            <Sparkles className="w-4 h-4 mr-2" />Ask BoliBazzar AI
+          </Button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 // ============ STATIONERY (invoice / review-request / cashback emails) ============
 function StationeryView({ user }) {
   const [tab, setTab] = useState('invoice');
@@ -1506,10 +1682,246 @@ function StationeryView({ user }) {
   );
 }
 
+// ============ ADMIN DASHBOARD ============
+function AdminDashboard() {
+  const [tab, setTab] = useState('overview');
+  const [data, setData] = useState({ requests: [], suppliers: [], users: [], payments: [] });
+  const [loading, setLoading] = useState(true);
+  async function load() {
+    setLoading(true);
+    const [r, s] = await Promise.all([api('/requests'), api('/suppliers')]);
+    setData({ requests: r.requests || [], suppliers: s.suppliers || [], users: [], payments: [] });
+    setLoading(false);
+  }
+  useEffect(() => { load(); }, []);
+  const totalGMV = data.requests.reduce((sum, r) => sum + (r.requirement?.budget_inr || 0), 0);
+  const approvedSuppliers = data.suppliers.filter(s => s.status === 'approved').length;
+  const closedReq = data.requests.filter(r => r.status === 'closed').length;
+  return (
+    <div className="container mx-auto px-6 py-10">
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+        <div>
+          <Badge variant="outline" className="mb-2"><Crown className="w-3 h-3 mr-1" />Admin</Badge>
+          <h1 className="text-3xl md:text-4xl font-bold">Platform overview</h1>
+          <p className="text-muted-foreground mt-1">Manage buyers, suppliers, requests, offers and payments across BoliBazzar.</p>
+        </div>
+        <Button variant="outline" onClick={load}><Loader2 className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />Refresh</Button>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <StatCard icon={<Users className="w-4 h-4 text-cyan-400" />} label="Buyer requests" value={data.requests.length} />
+        <StatCard icon={<Store className="w-4 h-4 text-fuchsia-400" />} label="Approved suppliers" value={approvedSuppliers} sub={`${data.suppliers.length} total`} />
+        <StatCard icon={<Trophy className="w-4 h-4 text-amber-400" />} label="Closed deals" value={closedReq} />
+        <StatCard icon={<TrendingUp className="w-4 h-4 text-emerald-400" />} label="Buyer intent GMV" value={formatINR(totalGMV)} />
+      </div>
+      <div className="flex gap-2 flex-wrap mb-4 border-b border-white/10">
+        {[['overview','Overview'],['suppliers','Suppliers'],['requests','Requests']].map(([k,l])=>(
+          <button key={k} onClick={()=>setTab(k)} className={`px-4 py-2 text-sm border-b-2 -mb-px transition ${tab===k ? 'border-fuchsia-500 text-foreground font-medium' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>{l}</button>
+        ))}
+      </div>
+      {tab === 'overview' && (
+        <div className="grid md:grid-cols-2 gap-4">
+          <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
+            <div className="font-semibold mb-3 flex items-center gap-2"><ClipboardList className="w-4 h-4 text-cyan-400" />Latest requests</div>
+            {data.requests.slice(0, 6).map(r => (
+              <div key={r.id} className="py-2 border-b border-white/5 last:border-0">
+                <div className="text-sm font-medium truncate">{r.requirement?.summary || r.requirement?.product}</div>
+                <div className="text-xs text-muted-foreground">{r.status.toUpperCase()} · {r.buyer_email || 'guest'} · {new Date(r.created_at).toLocaleDateString('en-IN')}</div>
+              </div>
+            ))}
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
+            <div className="font-semibold mb-3 flex items-center gap-2"><Store className="w-4 h-4 text-fuchsia-400" />Latest suppliers</div>
+            {data.suppliers.slice(0, 6).map(s => (
+              <div key={s.id} className="py-2 border-b border-white/5 last:border-0 flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-medium">{s.business_name}</div>
+                  <div className="text-xs text-muted-foreground">{s.email} · {s.city || 'India'}</div>
+                </div>
+                <Badge className={s.status === 'approved' ? 'bg-emerald-500/20 text-emerald-300 border-0' : 'bg-amber-500/20 text-amber-300 border-0'}>{s.status}</Badge>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {tab === 'suppliers' && (
+        <div className="rounded-2xl border border-white/10 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-white/[0.03]"><tr className="text-left text-xs uppercase text-muted-foreground"><th className="p-3">Business</th><th className="p-3">GST</th><th className="p-3">City</th><th className="p-3">Brands</th><th className="p-3">Status</th><th className="p-3">Rating</th></tr></thead>
+            <tbody>
+              {data.suppliers.map(s => (
+                <tr key={s.id} className="border-t border-white/5">
+                  <td className="p-3"><div className="font-medium">{s.business_name}</div><div className="text-xs text-muted-foreground">{s.email}</div></td>
+                  <td className="p-3 font-mono text-xs">{s.gst} {s.gst_valid ? <Check className="w-3 h-3 inline text-emerald-400" /> : null}</td>
+                  <td className="p-3">{s.city || '—'}</td>
+                  <td className="p-3 text-xs">{(s.brand_authorisations || []).slice(0, 3).join(', ') || '—'}</td>
+                  <td className="p-3"><Badge className={s.status === 'approved' ? 'bg-emerald-500/20 text-emerald-300 border-0' : 'bg-amber-500/20 text-amber-300 border-0'}>{s.status}</Badge></td>
+                  <td className="p-3"><Star className="w-3 h-3 inline fill-yellow-400 text-yellow-400 mr-0.5" />{s.rating}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {tab === 'requests' && (
+        <div className="rounded-2xl border border-white/10 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-white/[0.03]"><tr className="text-left text-xs uppercase text-muted-foreground"><th className="p-3">Buyer</th><th className="p-3">Product</th><th className="p-3">Budget</th><th className="p-3">Location</th><th className="p-3">Status</th><th className="p-3">Created</th></tr></thead>
+            <tbody>
+              {data.requests.map(r => (
+                <tr key={r.id} className="border-t border-white/5">
+                  <td className="p-3">{r.buyer_name}<div className="text-xs text-muted-foreground">{r.buyer_email || '—'}</div></td>
+                  <td className="p-3">{r.requirement?.product}<div className="text-xs text-muted-foreground">{r.requirement?.brand} {r.requirement?.storage}</div></td>
+                  <td className="p-3 font-medium">{formatINR(r.requirement?.budget_inr)}</td>
+                  <td className="p-3">{r.requirement?.location || '—'}</td>
+                  <td className="p-3"><Badge className={r.status === 'closed' ? 'bg-emerald-500/20 text-emerald-300 border-0' : 'bg-cyan-500/20 text-cyan-300 border-0'}>{r.status}</Badge></td>
+                  <td className="p-3 text-xs text-muted-foreground">{new Date(r.created_at).toLocaleDateString('en-IN')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============ APP LANDING (desktop-first, download focused) ============
+function AppLanding({ onOpenPWA }) {
+  return (
+    <div>
+      {/* Hero */}
+      <section className="relative overflow-hidden">
+        <div className="pointer-events-none absolute inset-0 -z-10">
+          <div className="absolute -top-40 left-1/2 -translate-x-1/2 h-[600px] w-[900px] rounded-full bg-gradient-to-br from-indigo-500/30 via-fuchsia-500/20 to-orange-500/20 blur-3xl" />
+        </div>
+        <div className="container mx-auto px-6 pt-16 md:pt-24 pb-16 grid md:grid-cols-2 gap-12 items-center">
+          <div>
+            <Badge variant="outline" className="mb-6 px-4 py-1.5"><Sparkles className="w-3.5 h-3.5 mr-2 text-orange-400" />Now on iPhone and Android</Badge>
+            <h1 className="text-4xl md:text-6xl font-bold tracking-tight leading-[1.05]">
+              <span className="text-foreground">You Ask.</span><br />
+              <span className="bg-gradient-to-r from-indigo-500 via-fuchsia-500 to-orange-500 bg-clip-text text-transparent">Sellers Compete.</span><br />
+              <span className="text-foreground">You Win.</span>
+            </h1>
+            <p className="mt-6 text-lg text-muted-foreground max-w-xl">
+              India&apos;s AI-powered reverse marketplace lives on your phone. Just speak or type what you want to buy — verified suppliers bid live, you pick the best offer, pay via UPI, and track till delivery.
+            </p>
+            <div className="mt-8 flex gap-3 flex-wrap">
+              <a href="#" className="inline-flex items-center gap-3 rounded-2xl bg-foreground text-background px-5 py-3 hover:opacity-90 transition">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.53 4.08zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>
+                <div className="text-left"><div className="text-[10px] opacity-70">Download on the</div><div className="font-semibold text-lg leading-tight">App Store</div></div>
+              </a>
+              <a href="#" className="inline-flex items-center gap-3 rounded-2xl bg-foreground text-background px-5 py-3 hover:opacity-90 transition">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M3 20.5V3.5a1.5 1.5 0 011.5-1.5c.28 0 .55.08.78.22l13 7.5a1.5 1.5 0 010 2.6l-13 7.5A1.5 1.5 0 013 20.5z"/></svg>
+                <div className="text-left"><div className="text-[10px] opacity-70">Get it on</div><div className="font-semibold text-lg leading-tight">Google Play</div></div>
+              </a>
+            </div>
+            <button onClick={onOpenPWA} className="mt-4 text-sm text-muted-foreground hover:text-foreground underline underline-offset-4">Or try the web preview →</button>
+            <div className="mt-8 flex items-center gap-4 text-sm text-muted-foreground">
+              <div className="flex items-center gap-1"><Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />4.8 ★ · 12k+ ratings</div>
+              <span>·</span>
+              <div className="flex items-center gap-1"><Shield className="w-4 h-4 text-emerald-400" />UPI · GST-verified suppliers</div>
+            </div>
+          </div>
+          {/* Phone mockup */}
+          <div className="relative mx-auto md:ml-auto">
+            <div className="relative w-[280px] md:w-[320px] h-[560px] md:h-[640px] rounded-[3rem] bg-gradient-to-br from-slate-800 to-slate-950 border-[6px] border-slate-800 shadow-2xl shadow-fuchsia-500/20 overflow-hidden">
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 h-6 w-32 bg-slate-950 rounded-b-2xl z-10" />
+              <div className="absolute inset-0 bg-gradient-to-b from-indigo-950 to-slate-950 p-4 pt-10">
+                <div className="flex items-center gap-2 mb-4">
+                  <BoliBazzarLogo size={24} />
+                  <div className="font-bold text-sm"><span className="text-foreground">Boli</span><span className="bg-gradient-to-r from-fuchsia-500 to-orange-500 bg-clip-text text-transparent">Bazzar</span></div>
+                </div>
+                <div className="rounded-2xl bg-white/5 border border-white/10 p-3 mb-3">
+                  <div className="text-xs text-muted-foreground mb-1">✨ Ask AI what you want</div>
+                  <div className="text-sm">iPhone 17 Pro Max 256GB Black under ₹1,20,000</div>
+                </div>
+                <div className="text-[10px] text-emerald-400 mb-2 flex items-center gap-1"><div className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />5 offers received</div>
+                {[{n:'Croma - Andheri',p:1114400,d:'Same-day',b:true},{n:'Reliance Digital',p:1120900,d:'Next-day',b:false},{n:'Vijay Sales',p:1124800,d:'2 days',b:false}].map((o,i)=>(
+                  <div key={i} className={`rounded-xl p-2.5 mb-2 border ${o.b?'border-fuchsia-500/40 bg-gradient-to-br from-fuchsia-500/10 to-orange-500/5':'border-white/10 bg-white/[0.02]'}`}>
+                    {o.b && <div className="text-[9px] text-fuchsia-300 mb-0.5">✨ AI PICK</div>}
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <div className="text-[11px] font-medium">{o.n}</div>
+                        <div className="text-[9px] text-muted-foreground">{o.d}</div>
+                      </div>
+                      <div className="font-bold text-sm">₹{(o.p/100000).toFixed(1)}L</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Features */}
+      <section className="container mx-auto px-6 py-16">
+        <div className="text-center mb-12">
+          <Badge variant="outline" className="mb-3">Built for Bharat</Badge>
+          <h2 className="text-3xl md:text-5xl font-bold">Everything shopping should be.</h2>
+        </div>
+        <div className="grid md:grid-cols-3 gap-4">
+          {[
+            {i:Mic, t:'Voice + Regional', d:'Speak your requirement in English, Hindi, Tamil, Marathi or Bengali. AI understands all.'},
+            {i:Bot, t:'AI Reverse Bidding', d:'Verified suppliers compete live. Watch prices drop in a 60-second bidding window.'},
+            {i:CreditCard, t:'Secure UPI Checkout', d:'Razorpay-powered payments. UPI, cards, netbanking, all wallets. GST invoice for every order.'},
+            {i:MessageSquare, t:'Chat & Negotiate', d:'Every offer has a chat. Ask questions, negotiate freebies, close the deal your way.'},
+            {i:Truck, t:'Live Tracking', d:'Watch your order move on a live India map. WhatsApp updates at every stage.'},
+            {i:Wallet, t:'Cashback + Tiers', d:'Earn 2-5% cashback based on your loyalty tier. Apply on any future order.'},
+          ].map((f,i)=>(
+            <div key={i} className="rounded-2xl border border-white/10 bg-white/[0.02] hover:bg-white/[0.04] transition p-6">
+              <div className="h-11 w-11 rounded-xl bg-gradient-to-br from-indigo-500/20 to-orange-500/20 border border-white/10 grid place-items-center mb-4">
+                <f.i className="w-5 h-5 text-fuchsia-300" />
+              </div>
+              <div className="font-semibold text-lg">{f.t}</div>
+              <div className="text-sm text-muted-foreground mt-1">{f.d}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Big CTA */}
+      <section className="container mx-auto px-6 py-16">
+        <div className="rounded-3xl border border-indigo-500/30 bg-gradient-to-br from-indigo-500/[0.08] via-fuchsia-500/[0.06] to-orange-500/[0.08] p-8 md:p-12 text-center">
+          <h2 className="text-3xl md:text-5xl font-bold">Ready to stop searching and start winning?</h2>
+          <p className="mt-3 text-muted-foreground max-w-xl mx-auto">Download BoliBazzar. Ask AI. Let suppliers compete for your business.</p>
+          <div className="mt-6 flex gap-3 justify-center flex-wrap">
+            <a href="#" className="inline-flex items-center gap-3 rounded-2xl bg-foreground text-background px-5 py-3">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.53 4.08zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>
+              <div className="text-left"><div className="text-[10px] opacity-70">Download on the</div><div className="font-semibold text-lg leading-tight">App Store</div></div>
+            </a>
+            <a href="#" className="inline-flex items-center gap-3 rounded-2xl bg-foreground text-background px-5 py-3">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M3 20.5V3.5a1.5 1.5 0 011.5-1.5c.28 0 .55.08.78.22l13 7.5a1.5 1.5 0 010 2.6l-13 7.5A1.5 1.5 0 013 20.5z"/></svg>
+              <div className="text-left"><div className="text-[10px] opacity-70">Get it on</div><div className="font-semibold text-lg leading-tight">Google Play</div></div>
+            </a>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 // ============ MAIN APP ============
 function App() {
+  // Detect mode from URL: ?admin, ?app, ?store=x, else landing
+  const initialMode = (() => {
+    if (typeof window === 'undefined') return 'landing';
+    const p = new URLSearchParams(window.location.search);
+    if (p.get('admin') !== null) return 'admin';
+    if (p.get('app') !== null) return 'app';
+    if (p.get('store')) return 'store';
+    return 'landing';
+  })();
+  const [mode, setMode] = useState(initialMode);
   const [view, setView] = useState('home');
-  const [showSplash, setShowSplash] = useState(true);
+  const [storeSlug, setStoreSlug] = useState(() => {
+    if (typeof window === 'undefined') return null;
+    return new URLSearchParams(window.location.search).get('store');
+  });
+  const [showSplash, setShowSplash] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try { return !localStorage.getItem('bb_splash_seen') && initialMode === 'landing'; } catch { return true; }
+  });
   const [user, setUser] = useState(null);
   const [loginOpen, setLoginOpen] = useState(false);
   const [supplierSignupOpen, setSupplierSignupOpen] = useState(false);
@@ -1577,6 +1989,64 @@ function App() {
     setRequest(rr.request); setOffers(rr.offers || []); setView('offers');
   }
 
+  // Detect ?store=xxx in URL to open storefront directly (only in landing/app modes)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const s = params.get('store');
+    if (s && !storeSlug) { setStoreSlug(s); setMode('store'); }
+  }, []);
+
+  function openPWA() { setMode('app'); setView('home'); }
+
+  // ============ LANDING MODE (public desktop) ============
+  if (mode === 'landing') {
+    return (
+      <div>
+        {showSplash && <Splash onDone={() => setShowSplash(false)} />}
+        <header className="sticky top-0 z-40 backdrop-blur-xl bg-background/60 border-b border-white/5">
+          <div className="container mx-auto px-6 h-16 flex items-center justify-between">
+            <button className="flex items-center gap-2">
+              <BoliBazzarLogo size={34} />
+              <div className="font-bold text-lg tracking-tight"><span className="text-foreground">Boli</span><span className="bg-gradient-to-r from-fuchsia-500 to-orange-500 bg-clip-text text-transparent">Bazzar</span></div>
+            </button>
+            <div className="flex items-center gap-2">
+              <ThemeToggle />
+              <Button variant="ghost" size="sm" onClick={() => { setMode('admin'); window.history.pushState({}, '', '/?admin'); }}><Crown className="w-4 h-4 mr-2" />Admin</Button>
+              <Button size="sm" className="bg-gradient-to-br from-indigo-600 to-orange-500" onClick={openPWA}>Try web preview</Button>
+            </div>
+          </div>
+        </header>
+        <AppLanding onOpenPWA={openPWA} />
+        <Footer />
+      </div>
+    );
+  }
+
+  // ============ ADMIN MODE ============
+  if (mode === 'admin') {
+    return (
+      <div>
+        <header className="sticky top-0 z-40 backdrop-blur-xl bg-background/60 border-b border-white/5">
+          <div className="container mx-auto px-6 h-16 flex items-center justify-between">
+            <button className="flex items-center gap-2" onClick={() => { setMode('landing'); window.history.pushState({}, '', '/'); }}>
+              <BoliBazzarLogo size={34} />
+              <div className="font-bold text-lg tracking-tight"><span className="text-foreground">Boli</span><span className="bg-gradient-to-r from-fuchsia-500 to-orange-500 bg-clip-text text-transparent">Bazzar</span></div>
+              <Badge className="ml-2 bg-gradient-to-r from-slate-300 to-indigo-300 text-slate-900 border-0"><Crown className="w-3 h-3 mr-1" />Admin</Badge>
+            </button>
+            <div className="flex items-center gap-2">
+              <ThemeToggle />
+              <Button variant="ghost" size="sm" onClick={() => { setMode('landing'); window.history.pushState({}, '', '/'); }}>Back to site</Button>
+            </div>
+          </div>
+        </header>
+        <AdminDashboard />
+        <Footer />
+      </div>
+    );
+  }
+
+  // ============ APP MODE (PWA / mobile preview) ============
   return (
     <div>
       {showSplash && <Splash onDone={() => setShowSplash(false)} />}
@@ -1589,6 +2059,7 @@ function App() {
       {view === 'my_requests' && user && (<><MyRequests user={user} onOpen={openPastRequest} /><Footer /></>)}
       {view === 'wallet' && user && (<><WalletView user={user} wallet={wallet} tier={tier} refresh={loadWallet} /><Footer /></>)}
       {view === 'stationery' && (<><StationeryView user={user} /><Footer /></>)}
+      {view === 'store' && storeSlug && (<><BrandStore slug={storeSlug} onClose={() => { setStoreSlug(null); setView('home'); if (typeof window !== 'undefined') window.history.replaceState({}, '', '/'); }} /><Footer /></>)}
 
       {requirement && <RequirementPreview requirement={requirement} onConfirm={confirmRequirement} onCancel={() => setRequirement(null)} confirming={confirming} />}
       <LoginModal open={loginOpen} onOpenChange={setLoginOpen} onLogin={setUser} />

@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "BoliBazzar",
+    "slug": "bolibazzar",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "bolibazzar",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0a12"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "in.bolibazzar.app",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "BoliBazzar uses the microphone so you can speak your buying requirement to our AI.",
+        "NSSpeechRecognitionUsageDescription": "BoliBazzar uses speech recognition to understand your buying requirement."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#4338ca"
+      },
+      "package": "in.bolibazzar.app",
+      "permissions": ["RECORD_AUDIO", "INTERNET"]
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-splash-screen"
+    ],
+    "extra": {
+      "apiBaseUrl": "https://request-to-offers.preview.emergentagent.com/api"
+    }
+  }
+}

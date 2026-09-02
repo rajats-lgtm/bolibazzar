@@ -834,6 +834,31 @@ async function route(req, { params }) {
     return ok({ delivery: status });
   }
 
+  // --- Public Brand Store (supplier storefront) ---
+  const storeMatch = path.match(/^\/store\/(.+)$/);
+  if (storeMatch && method === 'GET') {
+    const slug = decodeURIComponent(storeMatch[1]);
+    // Match by id or email or business_name slug
+    let supplier = await db.collection('suppliers').findOne({ id: slug }, { projection: { _id: 0 } });
+    if (!supplier) supplier = await db.collection('suppliers').findOne({ email: slug }, { projection: { _id: 0 } });
+    if (!supplier) {
+      const all = await db.collection('suppliers').find({}, { projection: { _id: 0 } }).toArray();
+      supplier = all.find(s => (s.business_name || '').toLowerCase().replace(/\s+/g, '-') === slug.toLowerCase());
+    }
+    if (!supplier) return err('store not found', 404);
+    // Recent offers by this supplier
+    const offers = await db.collection('offers').find({ $or: [{ supplier_id: supplier.id }, { supplier_name: { $regex: supplier.business_name.split(' ')[0], $options: 'i' } }] }, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(10).toArray();
+    // Reviews
+    const reviews = await db.collection('reviews').find({ supplier_id: supplier.id }, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(10).toArray();
+    // Active rules (as capabilities)
+    const rules = await db.collection('supplier_rules').find({ supplier_id: supplier.id, enabled: true }, { projection: { _id: 0 } }).toArray();
+    return ok({ supplier, offers, reviews, rules, stats: {
+      total_offers: offers.length,
+      accepted: offers.filter(o => o.status === 'accepted').length,
+      avg_rating: reviews.length ? Math.round(reviews.reduce((s, r) => s + r.rating, 0) / reviews.length * 10) / 10 : supplier.rating,
+    }});
+  }
+
   return err('route not found: ' + method + ' ' + path, 404);
 }
 

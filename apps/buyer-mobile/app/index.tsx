@@ -91,13 +91,13 @@ export default function Home() {
         </View>
 
         <View style={{ flexDirection: 'row', gap: 8, marginTop: 24 }}>
-          <TouchableOpacity onPress={() => router.push('/supplier')} style={{ flex: 1, backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1, borderRadius: 14, padding: 14, alignItems: 'center' }}>
-            <Ionicons name="storefront" size={20} color={colors.fuchsia} />
-            <Text style={{ color: colors.text, marginTop: 6, fontWeight: '500' }}>Supplier</Text>
-          </TouchableOpacity>
           <TouchableOpacity onPress={() => router.push('/profile')} style={{ flex: 1, backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1, borderRadius: 14, padding: 14, alignItems: 'center' }}>
             <Ionicons name="wallet" size={20} color={colors.emerald} />
             <Text style={{ color: colors.text, marginTop: 6, fontWeight: '500' }}>Wallet</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => router.push('/profile')} style={{ flex: 1, backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1, borderRadius: 14, padding: 14, alignItems: 'center' }}>
+            <Ionicons name="clipboard" size={20} color={colors.fuchsia} />
+            <Text style={{ color: colors.text, marginTop: 6, fontWeight: '500' }}>My requests</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>

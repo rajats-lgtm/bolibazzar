@@ -1,0 +1,55 @@
+name: Web CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'lib/**'
+      - 'components/**'
+      - 'package.json'
+      - 'yarn.lock'
+      - '.github/workflows/web.yml'
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build Next.js
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+      - name: Build
+        env:
+          MONGO_URL: mongodb://localhost:27017
+          DB_NAME: bolibazzar_ci
+          EMERGENT_LLM_KEY: dummy
+          EMERGENT_LLM_BASE_URL: https://integrations.emergentagent.com/llm
+          RAZORPAY_KEY_ID: dummy
+          RAZORPAY_KEY_SECRET: dummy
+          NEXT_PUBLIC_RAZORPAY_KEY_ID: dummy
+          NEXT_PUBLIC_BASE_URL: https://example.com
+          ADMIN_EMAILS: admin@bolibazzar.in
+        run: yarn build
+
+  deploy-vercel:
+    name: Deploy to Vercel
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: '--prod'
+        continue-on-error: true

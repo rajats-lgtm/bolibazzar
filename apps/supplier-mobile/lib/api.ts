@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
 
-const BASE = (Constants.expoConfig?.extra as any)?.apiBaseUrl || 'https://request-to-offers.preview.emergentagent.com/api';
+const BASE = process.env.EXPO_PUBLIC_API_BASE_URL || (Constants.expoConfig?.extra as any)?.apiBaseUrl || 'https://request-to-offers.preview.emergentagent.com/api';
 
 export async function api(path: string, options: RequestInit = {}) {
   const url = BASE + path;

@@ -23,10 +23,9 @@ bolibazzar/
 ```
 
 > The `app/` folder is the currently running Next.js dev server (Vercel-ready).
-> It hosts the landing (`/`), admin (`/?admin`) and mobile PWA preview (`/?app`)
-> in one deployment. `backend/` is the API subset. `apps/*-web` folders will
-> contain the production-split Next.js apps once you're ready to deploy each
-> independently.
+> It hosts the public landing (`/`) and mobile PWA preview (`/?app`) in one
+> deployment. The confidential CEO admin portal is a separate deployment under
+> `apps/admin-web`; it is not linked from the customer experience.
 
 ## 🚀 Quick start
 
@@ -59,6 +58,7 @@ EMERGENT_LLM_KEY=sk-emergent-...      # AI extraction
 RAZORPAY_KEY_ID=rzp_test_...
 RAZORPAY_KEY_SECRET=...
 ADMIN_EMAILS=admin@bolibazzar.in       # comma-separated admin allowlist
+ADMIN_ACCESS_KEY=...                   # server-only CEO access key
 # Optional
 TWILIO_ACCOUNT_SID=                    # WhatsApp alerts (blank = mock)
 TWILIO_AUTH_TOKEN=
@@ -77,9 +77,13 @@ See [`docs/PUSH.md`](./docs/PUSH.md). Backend endpoints `/api/push/register` + `
 
 See [`docs/store-assets/LISTINGS.md`](./docs/store-assets/LISTINGS.md) for App Store + Play Store copy, keywords, icon and screenshot briefs.
 
-## 🔐 Admin allowlist
+## 🔐 Private admin portal
 
-Admin dashboard at `/?admin` is protected by `ADMIN_EMAILS` env var. Add your email to unlock.
+Run `apps/admin-web` separately on a private subdomain. Access requires both the
+CEO email in `ADMIN_EMAILS` and the server-only `ADMIN_ACCESS_KEY`. Sessions are
+httpOnly, expire after eight hours, and are recorded in the `admin_audit`
+collection. Keep the allowlist limited to the CEO account and place the portal
+behind a VPN or identity-provider policy in production.
 
 ## 🛠 Tech
 

@@ -6,6 +6,7 @@ import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { api, formatINR } from '../lib/api';
 import { colors } from '../lib/theme';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function Request() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -19,7 +20,9 @@ export default function Request() {
   async function submit() {
     if (!form.supplier_name || !form.price_inr) return Alert.alert('Missing', 'Store name and price required');
     setSubmitting(true);
-    const r = await api(`/requests/${id}/offers`, { method: 'POST', body: JSON.stringify(form) });
+    const saved = await AsyncStorage.getItem('bb_supplier');
+    const supplier = saved ? JSON.parse(saved) : null;
+    const r = await api(`/requests/${id}/offers`, { method: 'POST', body: JSON.stringify({ ...form, supplier_id: supplier?.id || null, supplier_email: supplier?.email || null, supplier_type: supplier?.supplier_type || 'retail_store', rating: supplier?.rating, reviews: supplier?.reviews }) });
     setSubmitting(false);
     if (r.ok) { Alert.alert('Sent', 'Offer sent to buyer'); router.back(); }
     else Alert.alert('Failed', r.error || 'Try again');

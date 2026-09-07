@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api, formatINR } from '../lib/api';
 import { colors } from '../lib/theme';
 
@@ -18,7 +19,9 @@ export default function Offers() {
   useEffect(() => {
     (async () => {
       if (!requirement) return;
-      const r = await api('/requests', { method: 'POST', body: JSON.stringify({ requirement, raw_text: params.raw }) });
+      const saved = await AsyncStorage.getItem('bb_user');
+      const user = saved ? JSON.parse(saved) : null;
+      const r = await api('/requests', { method: 'POST', body: JSON.stringify({ requirement, raw_text: params.raw, buyer_name: user?.name || 'Guest Buyer', buyer_email: user?.email || null }) });
       if (r.ok) {
         setRequest(r.request);
         const sim = await api(`/requests/${r.request.id}/simulate`, { method: 'POST' });
@@ -42,7 +45,15 @@ export default function Offers() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Pay now', onPress: async () => {
         const r = await api('/payments/order', { method: 'POST', body: JSON.stringify({ offer_id: offer.id, amount_inr: offer.price_inr }) });
-        if (r.ok) Alert.alert('Order created', 'Open Razorpay Checkout via WebView (integrate react-native-razorpay).');
+        if (!r.ok) return Alert.alert('Payment failed', r.error || 'Could not create order');
+        if (r.mocked) {
+          const verified = await api('/payments/verify', { method: 'POST', body: JSON.stringify({ razorpay_order_id: r.order_id, razorpay_payment_id: `mock_payment_${Date.now()}`, razorpay_signature: 'mock' }) });
+          if (verified.ok && verified.status === 'paid') {
+            const accepted = await api(`/offers/${offer.id}/accept`, { method: 'POST', body: JSON.stringify({}) });
+            return Alert.alert(accepted.ok ? 'Order confirmed' : 'Payment complete', accepted.ok ? 'Your offer is accepted. Delivery tracking is now available.' : 'Payment was recorded successfully.');
+          }
+        }
+        Alert.alert('Order created', 'Complete payment in the configured Razorpay checkout.');
       }}
     ]);
   }

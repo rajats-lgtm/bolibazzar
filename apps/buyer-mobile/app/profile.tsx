@@ -7,6 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api, formatINR } from '../lib/api';
 import { colors } from '../lib/theme';
+import { registerPush } from '../lib/push';
 
 export default function Profile() {
   const [user, setUser] = useState<any>(null);
@@ -25,7 +26,7 @@ export default function Profile() {
   async function login() {
     if (!name || !email) return Alert.alert('Missing', 'Name + email needed');
     const r = await api('/auth/session', { method: 'POST', body: JSON.stringify({ name, email }) });
-    if (r.ok) { await AsyncStorage.setItem('bb_user', JSON.stringify(r.user)); setUser(r.user); loadWallet(email); }
+    if (r.ok) { await AsyncStorage.setItem('bb_user', JSON.stringify(r.user)); setUser(r.user); loadWallet(email); registerPush(email).catch(() => null); }
   }
   async function logout() { await AsyncStorage.removeItem('bb_user'); setUser(null); setWallet(null); }
   return (

@@ -12,6 +12,8 @@ export default function RootLayout() {
         <Stack.Screen name="offers" />
         <Stack.Screen name="supplier" />
         <Stack.Screen name="profile" />
+        <Stack.Screen name="analytics" />
+        <Stack.Screen name="rules" />
       </Stack>
     </GestureHandlerRootView>
   );

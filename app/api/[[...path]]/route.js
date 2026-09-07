@@ -16,6 +16,32 @@ function ok(data, status = 200) { return NextResponse.json(data, { status, heade
 function err(m, status = 400, extra = {}) { return NextResponse.json({ error: m, ...extra }, { status, headers: cors }); }
 export async function OPTIONS() { return new NextResponse(null, { status: 204, headers: cors }); }
 
+const ADMIN_SESSION_COOKIE = 'bb_admin_session';
+function adminEmails() {
+  return (process.env.ADMIN_EMAILS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+}
+function adminSignature(email) {
+  return crypto.createHmac('sha256', process.env.ADMIN_ACCESS_KEY || '').update(email).digest('hex');
+}
+function adminSession(email) {
+  return `${email}.${adminSignature(email)}`;
+}
+function sessionAdmin(req) {
+  const raw = req.cookies.get(ADMIN_SESSION_COOKIE)?.value || '';
+  const separator = raw.lastIndexOf('.');
+  if (separator < 1 || !process.env.ADMIN_ACCESS_KEY) return null;
+  const email = raw.slice(0, separator);
+  const signature = raw.slice(separator + 1);
+  const expected = adminSignature(email);
+  if (!adminEmails().includes(email) || signature.length !== expected.length) return null;
+  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected)) ? email : null;
+}
+async function auditAdmin(db, action, email, details = {}) {
+  await db.collection('admin_audit').insertOne({ id: uuidv4(), action, actor_email: email || null, details, created_at: new Date().toISOString() });
+}
+function adminGuard(req) { return sessionAdmin(req); }
+function safeRegex(value) { return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
 // --- AI extract ---
 async function extractRequirement(text) {
   const system = `You are BoliBazaar's AI buying assistant for the Indian electronics market. Extract a structured buying requirement from the user's message. Return STRICT JSON only.
@@ -183,6 +209,7 @@ async function runAutoBidMatching(db, request) {
     const scored = computeValueScore(offer, req);
     Object.assign(offer, scored);
     await db.collection('offers').insertOne(offer);
+    await pushNotifyBuyer(db, request, offer);
     offers.push(offer);
   }
   return offers;
@@ -315,9 +342,45 @@ async function route(req, { params }) {
   const p = await params;
   const path = '/' + (p?.path || []).join('/');
   const method = req.method;
-  const db = await getDb();
+  let db;
 
   if (path === '/' || path === '/health') return ok({ status: 'ok', service: 'BoliBazaar API', razorpay_live: hasRazorpay() });
+
+  if (path === '/admin/session' && method === 'POST') {
+    const { email, access_key } = await req.json();
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const valid = !!process.env.ADMIN_ACCESS_KEY && adminEmails().includes(normalizedEmail) && access_key === process.env.ADMIN_ACCESS_KEY;
+    if (!valid) {
+      try { await auditAdmin(await getDb(), 'login_failed', normalizedEmail || null); } catch {}
+      return err('admin access denied', 403);
+    }
+    try { await auditAdmin(await getDb(), 'login_success', normalizedEmail); } catch {}
+    const response = ok({ ok: true, email: normalizedEmail });
+    response.cookies.set(ADMIN_SESSION_COOKIE, adminSession(normalizedEmail), {
+      httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', path: '/', maxAge: 60 * 60 * 8,
+    });
+    return response;
+  }
+  if (path === '/admin/session' && method === 'GET') {
+    const email = sessionAdmin(req);
+    return ok({ authenticated: !!email, email });
+  }
+  if (path === '/admin/session' && method === 'DELETE') {
+    const email = sessionAdmin(req);
+    if (email) { try { await auditAdmin(await getDb(), 'logout', email); } catch {} }
+    const response = ok({ ok: true });
+    response.cookies.set(ADMIN_SESSION_COOKIE, '', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', path: '/', maxAge: 0 });
+    return response;
+  }
+
+  if ((path === '/admin/overview' || path === '/admin/audit') && method === 'GET' && !sessionAdmin(req)) {
+    return err('admin authentication required', 401);
+  }
+  if (path.startsWith('/admin/') && path !== '/admin/session' && !sessionAdmin(req)) {
+    return err('admin authentication required', 401);
+  }
+
+  db = await getDb();
 
   // --- Auth (lightweight session) ---
   if (path === '/auth/session' && method === 'POST') {
@@ -369,6 +432,23 @@ async function route(req, { params }) {
     const list = await db.collection('suppliers').find({}, { projection: { _id: 0 } }).sort({ created_at: -1 }).toArray();
     return ok({ suppliers: list });
   }
+  if (path === '/suppliers/session' && method === 'POST') {
+    const b = await req.json();
+    if (!b.business_name || !b.email) return err('business_name and email required');
+    const email = b.email.trim().toLowerCase();
+    const existing = await db.collection('suppliers').findOne({ email });
+    if (existing) return ok({ supplier: { ...existing, _id: undefined } });
+    const supplier = {
+      id: uuidv4(), business_name: b.business_name.trim(), email,
+      phone: b.phone || null, city: b.city || '', address: b.address || '',
+      pincode: b.pincode || '', gst: b.gst || '', gst_valid: false,
+      categories: b.categories || ['electronics'], brand_authorisations: [],
+      supplier_type: b.supplier_type || 'retail_store', status: 'pending_review',
+      rating: 4.5, reviews: 0, created_at: new Date().toISOString(),
+    };
+    await db.collection('suppliers').insertOne(supplier);
+    return ok({ supplier });
+  }
 
   // --- Requests ---
   if (path === '/extract' && method === 'POST') {
@@ -400,6 +480,148 @@ async function route(req, { params }) {
   if (path === '/requests' && method === 'GET') {
     const list = await db.collection('requests').find({}, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(50).toArray();
     return ok({ requests: list });
+  }
+  if (path === '/admin/overview' && method === 'GET') {
+    const actor = sessionAdmin(req);
+    if (!actor) return err('admin authentication required', 401);
+    await auditAdmin(db, 'view_overview', actor);
+    const [requests, suppliers, offers, payments] = await Promise.all([
+      db.collection('requests').find({}, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(100).toArray(),
+      db.collection('suppliers').find({}, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(100).toArray(),
+      db.collection('offers').find({}, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(200).toArray(),
+      db.collection('payments').find({}, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(100).toArray(),
+    ]);
+    const offersByRequest = offers.reduce((map, offer) => {
+      map[offer.request_id] = (map[offer.request_id] || 0) + 1;
+      return map;
+    }, {});
+    const enrichedRequests = requests.map(request => ({ ...request, offer_count: offersByRequest[request.id] || 0 }));
+    return ok({
+      requests: enrichedRequests, suppliers, offers, payments,
+      metrics: {
+        request_count: requests.length, offer_count: offers.length,
+        pending_offers: offers.filter(o => o.status === 'pending').length,
+        accepted_offers: offers.filter(o => o.status === 'accepted').length,
+        paid_orders: payments.filter(p => p.status === 'paid').length,
+        payment_volume_inr: payments.filter(p => p.status === 'paid').reduce((sum, p) => sum + (p.amount_inr || 0), 0),
+      },
+    });
+  }
+  if (path === '/admin/audit' && method === 'GET') {
+    const actor = sessionAdmin(req);
+    if (!actor) return err('admin authentication required', 401);
+    const log = await db.collection('admin_audit').find({}, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(200).toArray();
+    return ok({ audit: log });
+  }
+  if (path === '/admin/records' && method === 'GET') {
+    const actor = adminGuard(req);
+    if (!actor) return err('admin authentication required', 401);
+    const url = new URL(req.url);
+    const type = url.searchParams.get('type') || 'summary';
+    const search = url.searchParams.get('search')?.trim();
+    const status = url.searchParams.get('status')?.trim();
+    const limit = Math.min(Number(url.searchParams.get('limit')) || 200, 500);
+    const collections = { customers: 'users', suppliers: 'suppliers', requests: 'requests', offers: 'offers', payments: 'payments', reviews: 'reviews', messages: 'messages' };
+    if (type === 'settings') {
+      const settings = await db.collection('platform_settings').find({}, { projection: { _id: 0 } }).sort({ key: 1 }).toArray();
+      await auditAdmin(db, 'view_settings', actor);
+      return ok({ records: settings });
+    }
+    const collection = collections[type];
+    if (!collection) return err('unsupported admin record type');
+    const query = {};
+    if (status) query.status = status;
+    if (search) {
+      const regex = { $regex: safeRegex(search), $options: 'i' };
+      query.$or = type === 'customers' ? [{ name: regex }, { email: regex }] : type === 'suppliers' ? [{ business_name: regex }, { email: regex }] : type === 'requests' ? [{ buyer_name: regex }, { buyer_email: regex }, { 'requirement.product': regex }] : type === 'offers' ? [{ supplier_name: regex }, { supplier_id: regex }] : type === 'payments' ? [{ buyer_email: regex }, { offer_id: regex }] : type === 'reviews' ? [{ buyer_email: regex }, { supplier_name: regex }, { comment: regex }] : [{ text: regex }, { sender_name: regex }];
+    }
+    const records = await db.collection(collection).find(query, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(limit).toArray();
+    await auditAdmin(db, `view_${type}`, actor, { search: search || null, status: status || null, count: records.length });
+    return ok({ records });
+  }
+  const adminUserStatusMatch = path.match(/^\/admin\/customers\/([^/]+)\/status$/);
+  if (adminUserStatusMatch && method === 'PATCH') {
+    const actor = adminGuard(req); if (!actor) return err('admin authentication required', 401);
+    const email = decodeURIComponent(adminUserStatusMatch[1]); const { status, reason } = await req.json();
+    if (!['active', 'suspended'].includes(status)) return err('invalid customer status');
+    const before = await db.collection('users').findOne({ email }, { projection: { _id: 0, status: 1 } });
+    if (!before) return err('customer not found', 404);
+    await db.collection('users').updateOne({ email }, { $set: { status, status_reason: reason || '', status_changed_at: new Date().toISOString(), status_changed_by: actor } });
+    await auditAdmin(db, 'change_customer_status', actor, { email, before: before.status || 'active', after: status, reason: reason || null });
+    return ok({ ok: true, status });
+  }
+  const adminWalletMatch = path.match(/^\/admin\/customers\/([^/]+)\/wallet$/);
+  if (adminWalletMatch && method === 'PATCH') {
+    const actor = adminGuard(req); if (!actor) return err('admin authentication required', 401);
+    const email = decodeURIComponent(adminWalletMatch[1]); const { amount_inr, reason } = await req.json();
+    const amount = Number(amount_inr); if (!Number.isFinite(amount) || amount === 0) return err('amount_inr must be non-zero');
+    let wallet = await db.collection('wallets').findOne({ email });
+    if (!wallet) { wallet = { email, balance_inr: 0, transactions: [], created_at: new Date().toISOString() }; await db.collection('wallets').insertOne(wallet); }
+    const balance = (wallet.balance_inr || 0) + amount;
+    if (balance < 0) return err('wallet balance cannot be negative');
+    const transaction = { id: uuidv4(), type: amount > 0 ? 'credit' : 'debit', amount: Math.abs(amount), reason: reason || 'Admin adjustment', at: new Date().toISOString(), admin_email: actor };
+    await db.collection('wallets').updateOne({ email }, { $set: { balance_inr: balance }, $push: { transactions: transaction } });
+    await auditAdmin(db, 'adjust_customer_wallet', actor, { email, amount_inr: amount, reason: reason || null });
+    return ok({ ok: true, balance_inr: balance });
+  }
+  const adminSupplierStatusMatch = path.match(/^\/admin\/suppliers\/([^/]+)\/status$/);
+  if (adminSupplierStatusMatch && method === 'PATCH') {
+    const actor = adminGuard(req); if (!actor) return err('admin authentication required', 401);
+    const id = adminSupplierStatusMatch[1]; const { status, reason } = await req.json();
+    if (!['pending_review', 'approved', 'rejected', 'suspended'].includes(status)) return err('invalid supplier status');
+    const before = await db.collection('suppliers').findOne({ id }, { projection: { _id: 0 } }); if (!before) return err('supplier not found', 404);
+    await db.collection('suppliers').updateOne({ id }, { $set: { status, status_reason: reason || '', status_changed_at: new Date().toISOString(), status_changed_by: actor } });
+    await auditAdmin(db, 'change_supplier_status', actor, { id, business_name: before.business_name, before: before.status, after: status, reason: reason || null });
+    return ok({ ok: true, status });
+  }
+  const adminRequestStatusMatch = path.match(/^\/admin\/requests\/([^/]+)\/status$/);
+  if (adminRequestStatusMatch && method === 'PATCH') {
+    const actor = adminGuard(req); if (!actor) return err('admin authentication required', 401);
+    const id = adminRequestStatusMatch[1]; const { status, note } = await req.json();
+    if (!['open', 'closed', 'cancelled', 'escalated'].includes(status)) return err('invalid request status');
+    const before = await db.collection('requests').findOne({ id }, { projection: { _id: 0, status: 1 } }); if (!before) return err('request not found', 404);
+    await db.collection('requests').updateOne({ id }, { $set: { status, admin_note: note || '', updated_at: new Date().toISOString(), updated_by: actor } });
+    await auditAdmin(db, 'change_request_status', actor, { id, before: before.status, after: status, note: note || null });
+    return ok({ ok: true, status });
+  }
+  const adminOfferStatusMatch = path.match(/^\/admin\/offers\/([^/]+)\/status$/);
+  if (adminOfferStatusMatch && method === 'PATCH') {
+    const actor = adminGuard(req); if (!actor) return err('admin authentication required', 401);
+    const id = adminOfferStatusMatch[1]; const { status, reason } = await req.json();
+    if (!['pending', 'rejected', 'accepted'].includes(status)) return err('invalid offer status');
+    const before = await db.collection('offers').findOne({ id }, { projection: { _id: 0 } }); if (!before) return err('offer not found', 404);
+    await db.collection('offers').updateOne({ id }, { $set: { status, admin_reason: reason || '', moderated_at: new Date().toISOString(), moderated_by: actor } });
+    if (status === 'accepted') { await db.collection('offers').updateMany({ request_id: before.request_id, id: { $ne: id } }, { $set: { status: 'rejected' } }); await db.collection('requests').updateOne({ id: before.request_id }, { $set: { status: 'closed', accepted_offer_id: id } }); }
+    await auditAdmin(db, 'change_offer_status', actor, { id, request_id: before.request_id, before: before.status, after: status, reason: reason || null });
+    return ok({ ok: true, status });
+  }
+  const adminReviewVisibilityMatch = path.match(/^\/admin\/reviews\/([^/]+)\/visibility$/);
+  if (adminReviewVisibilityMatch && method === 'PATCH') {
+    const actor = adminGuard(req); if (!actor) return err('admin authentication required', 401);
+    const id = adminReviewVisibilityMatch[1]; const { visibility, reason } = await req.json();
+    if (!['visible', 'hidden'].includes(visibility)) return err('invalid review visibility');
+    const review = await db.collection('reviews').findOne({ id }, { projection: { _id: 0 } }); if (!review) return err('review not found', 404);
+    await db.collection('reviews').updateOne({ id }, { $set: { visibility, moderation_reason: reason || '', moderated_at: new Date().toISOString(), moderated_by: actor } });
+    await auditAdmin(db, 'moderate_review', actor, { id, before: review.visibility || 'visible', after: visibility, reason: reason || null });
+    return ok({ ok: true, visibility });
+  }
+  const adminPaymentMatch = path.match(/^\/admin\/payments\/([^/]+)\/review$/);
+  if (adminPaymentMatch && method === 'PATCH') {
+    const actor = adminGuard(req); if (!actor) return err('admin authentication required', 401);
+    const id = adminPaymentMatch[1]; const { review_status, note } = await req.json();
+    if (!['unreviewed', 'reconciled', 'investigate', 'refunded'].includes(review_status)) return err('invalid payment review status');
+    const payment = await db.collection('payments').findOne({ id }, { projection: { _id: 0 } }); if (!payment) return err('payment not found', 404);
+    await db.collection('payments').updateOne({ id }, { $set: { review_status, admin_note: note || '', reviewed_at: new Date().toISOString(), reviewed_by: actor } });
+    await auditAdmin(db, 'review_payment', actor, { id, before: payment.review_status || 'unreviewed', after: review_status, note: note || null });
+    return ok({ ok: true, review_status });
+  }
+  if (path === '/admin/settings' && method === 'PATCH') {
+    const actor = adminGuard(req); if (!actor) return err('admin authentication required', 401);
+    const { key, value } = await req.json();
+    if (!/^[a-z][a-z0-9_]{1,60}$/.test(key) || key.includes('secret') || key.includes('password') || key.includes('token')) return err('invalid or secret setting key');
+    await db.collection('platform_settings').updateOne({ key }, { $set: { key, value, updated_at: new Date().toISOString(), updated_by: actor } }, { upsert: true });
+    await auditAdmin(db, 'update_platform_setting', actor, { key, value });
+    return ok({ ok: true, key, value });
   }
   const reqMatch = path.match(/^\/requests\/([^/]+)$/);
   if (reqMatch && method === 'GET') {
@@ -448,6 +670,7 @@ async function route(req, { params }) {
       created_at: new Date().toISOString(),
     };
     await db.collection('offers').insertOne(offer);
+    pushNotifyBuyer(db, reqDoc, offer).catch(e => console.error('offer push', e));
     return ok({ offer });
   }
   const acceptMatch = path.match(/^\/offers\/([^/]+)\/accept$/);

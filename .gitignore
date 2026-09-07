@@ -33,8 +33,9 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # Env
-.env*.local
-# Keep root .env with test keys for dev but exclude anything sensitive
+.env
+.env.*
+!.env.example
 
 # Vercel
 .vercel
@@ -48,9 +49,14 @@ next-env.d.ts
 *.p8
 *.p12
 *.key
+*.keystore
 *.mobileprovision
 google-services.json
 play-service-account.json
+
+# Mobile package manager lockfiles (npm is canonical for split apps)
+apps/buyer-mobile/yarn.lock
+apps/supplier-mobile/yarn.lock
 
 # Editor
 .vscode/

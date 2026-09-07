@@ -1,25 +1,21 @@
-# apps/admin-web
+# Private admin portal
 
-Production Next.js admin dashboard for BoliBazzar operations team.
+This app is intentionally separate from the customer desktop, buyer, and supplier experiences. The customer app does not link to or expose the admin portal.
 
-## Current implementation
+## Required environment
 
-The admin dashboard is live at `/?admin` on the combined web deploy (see root `app/page.js` → `AdminDashboard` component).
+Set these variables on the backend and admin deployment:
 
-## Split-out roadmap
+- `ADMIN_EMAILS`: comma-separated CEO allowlist, with no other accounts
+- `ADMIN_ACCESS_KEY`: long random secret shared only with the CEO
+- `ADMIN_API_ORIGIN`: backend origin, for example `https://api.bolibazzar.in`
 
-When ready to run admin as a separate deploy:
+The admin app proxies `/api/*` to `ADMIN_API_ORIGIN`; it does not own a second database connection.
 
-1. Copy `app/page.js` → extract `AdminDashboard`, `Navbar` (admin variant) into this folder
-2. Copy `app/api/[[...path]]/route.js` → same for backend (or keep single API)
-3. Deploy to a private subdomain (e.g. admin.bolibazzar.in) with the `ADMIN_EMAILS` env var
+## Security behavior
 
-## Access
-
-Gate: `ADMIN_EMAILS` env var (comma-separated). Any email in the list unlocks the dashboard after login.
-
-Current features:
-- Platform stats (buyer requests, approved suppliers, closed deals, buyer intent GMV)
-- Supplier table with GST verification
-- Request table with status
-- Latest activity feed
+- Login requires both an allowlisted CEO email and `ADMIN_ACCESS_KEY`.
+- The backend issues an eight-hour, `httpOnly`, `sameSite=strict` signed session cookie.
+- Admin overview and audit endpoints reject unauthenticated requests.
+- Login success, failed login, logout, overview access, and audit access are written to `admin_audit`.
+- Deploy this app only on a private admin subdomain or behind an additional VPN/identity-provider layer.

@@ -1685,12 +1685,12 @@ function StationeryView({ user }) {
 // ============ ADMIN DASHBOARD ============
 function AdminDashboard() {
   const [tab, setTab] = useState('overview');
-  const [data, setData] = useState({ requests: [], suppliers: [], users: [], payments: [] });
+  const [data, setData] = useState({ requests: [], suppliers: [], users: [], payments: [], offers: [], metrics: {} });
   const [loading, setLoading] = useState(true);
   async function load() {
     setLoading(true);
-    const [r, s] = await Promise.all([api('/requests'), api('/suppliers')]);
-    setData({ requests: r.requests || [], suppliers: s.suppliers || [], users: [], payments: [] });
+    const r = await api('/admin/overview');
+    if (r.ok) setData({ requests: r.requests || [], suppliers: r.suppliers || [], users: [], payments: r.payments || [], offers: r.offers || [], metrics: r.metrics || {} });
     setLoading(false);
   }
   useEffect(() => { load(); }, []);
@@ -1712,6 +1712,8 @@ function AdminDashboard() {
         <StatCard icon={<Store className="w-4 h-4 text-fuchsia-400" />} label="Approved suppliers" value={approvedSuppliers} sub={`${data.suppliers.length} total`} />
         <StatCard icon={<Trophy className="w-4 h-4 text-amber-400" />} label="Closed deals" value={closedReq} />
         <StatCard icon={<TrendingUp className="w-4 h-4 text-emerald-400" />} label="Buyer intent GMV" value={formatINR(totalGMV)} />
+        <StatCard icon={<MessageSquare className="w-4 h-4 text-cyan-400" />} label="Supplier offers" value={data.metrics.offer_count || data.offers.length} sub={`${data.metrics.pending_offers || 0} pending`} />
+        <StatCard icon={<CreditCard className="w-4 h-4 text-emerald-400" />} label="Paid orders" value={data.metrics.paid_orders || 0} sub={formatINR(data.metrics.payment_volume_inr || 0)} />
       </div>
       <div className="flex gap-2 flex-wrap mb-4 border-b border-white/10">
         {[['overview','Overview'],['suppliers','Suppliers'],['requests','Requests']].map(([k,l])=>(
@@ -1725,7 +1727,7 @@ function AdminDashboard() {
             {data.requests.slice(0, 6).map(r => (
               <div key={r.id} className="py-2 border-b border-white/5 last:border-0">
                 <div className="text-sm font-medium truncate">{r.requirement?.summary || r.requirement?.product}</div>
-                <div className="text-xs text-muted-foreground">{r.status.toUpperCase()} · {r.buyer_email || 'guest'} · {new Date(r.created_at).toLocaleDateString('en-IN')}</div>
+                <div className="text-xs text-muted-foreground">{r.status.toUpperCase()} · {r.offer_count || 0} offers · {r.buyer_email || 'guest'} · {new Date(r.created_at).toLocaleDateString('en-IN')}</div>
               </div>
             ))}
           </div>
@@ -1738,6 +1740,15 @@ function AdminDashboard() {
                   <div className="text-xs text-muted-foreground">{s.email} · {s.city || 'India'}</div>
                 </div>
                 <Badge className={s.status === 'approved' ? 'bg-emerald-500/20 text-emerald-300 border-0' : 'bg-amber-500/20 text-amber-300 border-0'}>{s.status}</Badge>
+              </div>
+            ))}
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
+            <div className="font-semibold mb-3 flex items-center gap-2"><MessageSquare className="w-4 h-4 text-cyan-400" />Latest supplier activity</div>
+            {data.offers.slice(0, 6).map(o => (
+              <div key={o.id} className="py-2 border-b border-white/5 last:border-0 flex items-center justify-between gap-3">
+                <div className="min-w-0"><div className="text-sm font-medium truncate">{o.supplier_name}</div><div className="text-xs text-muted-foreground truncate">{formatINR(o.price_inr)} · {o.source || 'manual'}</div></div>
+                <Badge className={o.status === 'accepted' ? 'bg-emerald-500/20 text-emerald-300 border-0' : 'bg-cyan-500/20 text-cyan-300 border-0'}>{o.status}</Badge>
               </div>
             ))}
           </div>
@@ -1903,25 +1914,13 @@ function AppLanding({ onOpenPWA }) {
 
 // ============ MAIN APP ============
 function App() {
-  // Detect mode from URL: ?admin, ?app, ?store=x, else landing
-  const initialMode = (() => {
-    if (typeof window === 'undefined') return 'landing';
-    const p = new URLSearchParams(window.location.search);
-    if (p.get('admin') !== null) return 'admin';
-    if (p.get('app') !== null) return 'app';
-    if (p.get('store')) return 'store';
-    return 'landing';
-  })();
-  const [mode, setMode] = useState(initialMode);
+  // Detect customer mode from URL: ?app, ?store=x, else landing.
+  // Keep the first render identical on the server and client. Browser URL and
+  // localStorage state is applied after hydration in the effect below.
+  const [mode, setMode] = useState('landing');
   const [view, setView] = useState('home');
-  const [storeSlug, setStoreSlug] = useState(() => {
-    if (typeof window === 'undefined') return null;
-    return new URLSearchParams(window.location.search).get('store');
-  });
-  const [showSplash, setShowSplash] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    try { return !localStorage.getItem('bb_splash_seen') && initialMode === 'landing'; } catch { return true; }
-  });
+  const [storeSlug, setStoreSlug] = useState(null);
+  const [showSplash, setShowSplash] = useState(false);
   const [user, setUser] = useState(null);
   const [loginOpen, setLoginOpen] = useState(false);
   const [supplierSignupOpen, setSupplierSignupOpen] = useState(false);
@@ -1950,7 +1949,18 @@ function App() {
   }
   useEffect(() => { loadWallet(); }, [user?.email]);
 
-  useEffect(() => { const s = localStorage.getItem('bb_user'); if (s) try { setUser(JSON.parse(s)); } catch {} }, []);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const nextMode = params.get('app') !== null ? 'app' : params.get('store') ? 'store' : 'landing';
+    const nextStoreSlug = params.get('store');
+    setMode(nextMode);
+    setStoreSlug(nextStoreSlug);
+    if (nextMode === 'landing' || nextMode === 'app') {
+      try { setShowSplash(!localStorage.getItem('bb_splash_seen')); } catch { setShowSplash(true); }
+    }
+    const s = localStorage.getItem('bb_user');
+    if (s) try { setUser(JSON.parse(s)); } catch {}
+  }, []);
   useEffect(() => { user ? localStorage.setItem('bb_user', JSON.stringify(user)) : localStorage.removeItem('bb_user'); }, [user]);
 
   async function handleExtract(t) {
@@ -1989,14 +1999,6 @@ function App() {
     setRequest(rr.request); setOffers(rr.offers || []); setView('offers');
   }
 
-  // Detect ?store=xxx in URL to open storefront directly (only in landing/app modes)
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const params = new URLSearchParams(window.location.search);
-    const s = params.get('store');
-    if (s && !storeSlug) { setStoreSlug(s); setMode('store'); }
-  }, []);
-
   function openPWA() { setMode('app'); setView('home'); }
 
   // ============ LANDING MODE (public desktop) ============
@@ -2012,35 +2014,11 @@ function App() {
             </button>
             <div className="flex items-center gap-2">
               <ThemeToggle />
-              <Button variant="ghost" size="sm" onClick={() => { setMode('admin'); window.history.pushState({}, '', '/?admin'); }}><Crown className="w-4 h-4 mr-2" />Admin</Button>
               <Button size="sm" className="bg-gradient-to-br from-indigo-600 to-orange-500" onClick={openPWA}>Try web preview</Button>
             </div>
           </div>
         </header>
         <AppLanding onOpenPWA={openPWA} />
-        <Footer />
-      </div>
-    );
-  }
-
-  // ============ ADMIN MODE ============
-  if (mode === 'admin') {
-    return (
-      <div>
-        <header className="sticky top-0 z-40 backdrop-blur-xl bg-background/60 border-b border-white/5">
-          <div className="container mx-auto px-6 h-16 flex items-center justify-between">
-            <button className="flex items-center gap-2" onClick={() => { setMode('landing'); window.history.pushState({}, '', '/'); }}>
-              <BoliBazzarLogo size={34} />
-              <div className="font-bold text-lg tracking-tight"><span className="text-foreground">Boli</span><span className="bg-gradient-to-r from-fuchsia-500 to-orange-500 bg-clip-text text-transparent">Bazzar</span></div>
-              <Badge className="ml-2 bg-gradient-to-r from-slate-300 to-indigo-300 text-slate-900 border-0"><Crown className="w-3 h-3 mr-1" />Admin</Badge>
-            </button>
-            <div className="flex items-center gap-2">
-              <ThemeToggle />
-              <Button variant="ghost" size="sm" onClick={() => { setMode('landing'); window.history.pushState({}, '', '/'); }}>Back to site</Button>
-            </div>
-          </div>
-        </header>
-        <AdminDashboard />
         <Footer />
       </div>
     );

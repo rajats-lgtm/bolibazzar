@@ -24,6 +24,17 @@ function check(name, ok, detail = '') {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** Poll an in-page predicate until it is true, so we never race hydration. */
+async function waitFor(page, fn, { timeout = 25000, label = 'condition' } = {}) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    try { if (await page.evaluate(fn)) return true; } catch {}
+    await sleep(250);
+  }
+  console.log(`    (timed out waiting for ${label})`);
+  return false;
+}
+
 const browser = await puppeteer.launch({
   executablePath: CHROME,
   headless: 'new',
@@ -35,6 +46,9 @@ await page.setViewport({ width: 1440, height: 1000 });
 // Collect anything that would show up as a red error in devtools.
 const errors = [];
 page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
+page.on('response', (r) => {
+  if (r.status() >= 400) errors.push(`http ${r.status()}: ${r.url()}`);
+});
 page.on('console', (m) => {
   if (m.type() === 'error') {
     const text = m.text();
@@ -60,7 +74,9 @@ try {
   await page.screenshot({ path: `${shots}/02-app-home.png` });
 
   console.log('\n\x1b[1mOTP sign-in\x1b[0m');
-  // Open the sign-in dialog.
+  // The nav shows a skeleton until the session check returns, so wait for the
+  // real button rather than assuming it has rendered.
+  await waitFor(page, () => [...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Sign in'), { label: 'sign-in button' });
   const signedIn = await page.evaluate(() => {
     const button = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Sign in');
     if (button) { button.click(); return true; }
@@ -69,6 +85,7 @@ try {
   check('sign-in button present', signedIn);
   await sleep(900);
 
+  await waitFor(page, () => !!document.querySelector('input[type="email"]'), { label: 'email field' });
   await page.evaluate(() => {
     const input = document.querySelector('input[type="email"]');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -78,7 +95,7 @@ try {
   await page.evaluate(() => {
     [...document.querySelectorAll('button')].find((b) => /Send code/.test(b.textContent))?.click();
   });
-  await sleep(2500);
+  await waitFor(page, () => [...document.querySelectorAll('div')].some((d) => /^\d{6}$/.test(d.textContent.trim())), { label: 'dev code' });
 
   const devCode = await page.evaluate(() => {
     const el = [...document.querySelectorAll('div')].find((d) => /^\d{6}$/.test(d.textContent.trim()));
@@ -99,8 +116,12 @@ try {
       [...document.querySelectorAll('button')].find((b) => /Verify/.test(b.textContent))?.click();
     });
     await sleep(3000);
-    const afterLogin = await page.evaluate(() => document.body.innerText);
-    check('signed in (nav shows account)', !/^Sign in$/m.test(afterLogin) || /Orders/.test(afterLogin), '');
+    const who = await page.evaluate(async () => {
+      const r = await fetch('/api/auth/session', { credentials: 'same-origin' });
+      const d = await r.json().catch(() => ({}));
+      return d?.buyer?.email || null;
+    });
+    check('signed in (session established)', who === 'uicheck@test.in', String(who));
     await page.screenshot({ path: `${shots}/04-signed-in.png` });
   }
 
@@ -115,7 +136,7 @@ try {
   await page.evaluate(() => {
     [...document.querySelectorAll('button')].find((b) => /Ask AI/.test(b.textContent))?.click();
   });
-  await sleep(6000);
+  await waitFor(page, () => /AI understood your requirement/.test(document.body.innerText), { timeout: 40000, label: 'AI extraction' });
   const preview = await page.evaluate(() => document.body.innerText);
   check('AI parsed the requirement', /AI understood your requirement/.test(preview), '');
   await page.screenshot({ path: `${shots}/05-requirement.png` });
@@ -123,7 +144,7 @@ try {
   await page.evaluate(() => {
     [...document.querySelectorAll('button')].find((b) => /Send to suppliers/.test(b.textContent))?.click();
   });
-  await sleep(9000);
+  await waitFor(page, () => /Live bidding open|ffers received/.test(document.body.innerText), { timeout: 40000, label: 'auction board' });
   const auctionText = await page.evaluate(() => document.body.innerText);
   check('auction board opened', /Live bidding open|offers received|Offers received/i.test(auctionText), '');
   const firstCount = (auctionText.match(/Accept & Pay/g) || []).length;

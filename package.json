@@ -1,13 +1,17 @@
 {
-    "name": "nextjs-mongo-template",
+    "name": "bolibazzar",
     "version": "0.1.0",
     "private": true,
     "scripts": {
-        "dev": "NODE_OPTIONS='--max-old-space-size=512' next dev --hostname 0.0.0.0 --port 3000",
+        "db": "node scripts/dev-db.mjs",
+        "seed": "node scripts/seed.mjs",
+        "dev": "NODE_OPTIONS='--max-old-space-size=4096' next dev --hostname 0.0.0.0 --port 3000",
         "dev:no-reload": "next dev --hostname 0.0.0.0 --port 3000",
         "dev:webpack": "next dev --hostname 0.0.0.0 --port 3000",
         "build": "next build",
-        "start": "next start"
+        "start": "next start",
+        "admin": "npm --prefix apps/admin-web run dev",
+        "landing": "npm --prefix apps/desktop-landing run dev"
     },
     "dependencies": {
         "@hookform/resolvers": "5.1.1",
@@ -76,6 +80,7 @@
         "globals": "16.2.0",
         "mongodb-memory-server-core": "10.1.4",
         "postcss": "8",
+        "puppeteer-core": "23.11.1",
         "tailwindcss": "3.4.1"
     },
     "resolutions": {

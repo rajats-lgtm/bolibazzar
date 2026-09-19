@@ -1,54 +1,99 @@
-import { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, TextInput, Alert } from 'react-native';
+import { useCallback, useState } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { LinearGradient } from 'expo-linear-gradient';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { api, formatINR } from '../lib/api';
+import { api, setToken } from '../lib/api';
 import { colors } from '../lib/theme';
+import { registerPush } from '../lib/push';
+import OtpLogin from '../components/OtpLogin';
 
 export default function Profile() {
   const [supplier, setSupplier] = useState<any>(null);
-  const [businessName, setBusinessName] = useState('');
-  const [email, setEmail] = useState('');
-  useEffect(() => {
-    AsyncStorage.getItem('bb_supplier').then((s) => { if (s) setSupplier(JSON.parse(s)); });
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    const session = await api('/auth/session');
+    setSupplier(session.ok ? session.supplier || null : null);
+    setLoading(false);
   }, []);
-  async function login() {
-    if (!businessName || !email) return Alert.alert('Missing', 'Business name + email needed');
-    const r = await api('/suppliers/session', { method: 'POST', body: JSON.stringify({ business_name: businessName, email }) });
-    if (r.ok) { await AsyncStorage.setItem('bb_supplier', JSON.stringify(r.supplier)); setSupplier(r.supplier); }
+
+  useFocusEffect(useCallback(() => { setLoading(true); load(); }, [load]));
+
+  async function onSignedIn(account: any) {
+    setSupplier(account);
+    registerPush().catch(() => null);
   }
-  async function logout() { await AsyncStorage.removeItem('bb_supplier'); setSupplier(null); }
+
+  async function signOut() {
+    await api('/auth/session', { method: 'DELETE', body: JSON.stringify({ role: 'supplier' }) });
+    await setToken(null);
+    setSupplier(null);
+  }
+
+  const statusColour =
+    supplier?.status === 'approved' ? colors.emerald :
+    supplier?.status === 'suspended' || supplier?.status === 'rejected' ? '#f87171' : colors.amber;
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', padding: 16 }}>
-        <TouchableOpacity onPress={() => router.back()}><Ionicons name="chevron-back" size={26} color={colors.text} /></TouchableOpacity>
+        <TouchableOpacity onPress={() => router.back()}>
+          <Ionicons name="chevron-back" size={26} color={colors.text} />
+        </TouchableOpacity>
         <Text style={{ color: colors.text, fontSize: 20, fontWeight: '700', marginLeft: 12 }}>Profile</Text>
       </View>
+
       <ScrollView contentContainerStyle={{ padding: 16 }}>
-        {!supplier ? (
-          <View>
-            <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700', marginBottom: 12 }}>Supplier onboarding</Text>
-            <TextInput value={businessName} onChangeText={setBusinessName} placeholder="Business name" placeholderTextColor={colors.muted} style={{ backgroundColor: colors.card, color: colors.text, padding: 12, borderRadius: 12, marginBottom: 10 }} />
-            <TextInput value={email} onChangeText={setEmail} placeholder="Email" placeholderTextColor={colors.muted} autoCapitalize="none" keyboardType="email-address" style={{ backgroundColor: colors.card, color: colors.text, padding: 12, borderRadius: 12, marginBottom: 12 }} />
-            <TouchableOpacity onPress={login} style={{ borderRadius: 12, overflow: 'hidden' }}>
-              <LinearGradient colors={[colors.indigo, colors.orange]} start={{x:0,y:0}} end={{x:1,y:1}} style={{ padding: 14, alignItems: 'center' }}>
-                <Text style={{ color: 'white', fontWeight: '600' }}>Continue</Text>
-              </LinearGradient>
-            </TouchableOpacity>
-          </View>
+        {loading ? (
+          <ActivityIndicator color={colors.fuchsia} style={{ marginTop: 40 }} />
+        ) : !supplier ? (
+          <OtpLogin role="supplier" onSignedIn={onSignedIn} />
         ) : (
           <View>
             <Text style={{ color: colors.text, fontSize: 26, fontWeight: '800' }}>{supplier.business_name}</Text>
             <Text style={{ color: colors.muted, marginTop: 4 }}>{supplier.email}</Text>
-            <View style={{ marginTop: 16, backgroundColor: 'rgba(16,185,129,0.08)', borderColor: 'rgba(16,185,129,0.3)', borderWidth: 1, borderRadius: 16, padding: 16 }}>
-              <Text style={{ color: colors.muted, fontSize: 11, textTransform: 'uppercase' }}>Account status</Text>
-              <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700' }}>{supplier.status || 'pending_review'}</Text>
-              <Text style={{ color: colors.muted, fontSize: 12, marginTop: 4 }}>You can submit offers while verification is reviewed.</Text>
+            {!!supplier.city && <Text style={{ color: colors.muted, marginTop: 2 }}>{supplier.city}</Text>}
+
+            <View style={{ marginTop: 18, borderColor: colors.border, borderWidth: 1, borderRadius: 16, padding: 16 }}>
+              <Text style={{ color: colors.muted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 1 }}>Account status</Text>
+              <Text style={{ color: statusColour, fontSize: 18, fontWeight: '700', marginTop: 4, textTransform: 'capitalize' }}>
+                {String(supplier.status || '').replace(/_/g, ' ')}
+              </Text>
+              {supplier.status !== 'approved' && (
+                <Text style={{ color: colors.muted, fontSize: 12, marginTop: 6, lineHeight: 18 }}>
+                  You can see live requests, but bidding unlocks once an admin approves your business.
+                </Text>
+              )}
             </View>
-            <TouchableOpacity onPress={logout} style={{ marginTop: 24, padding: 14, borderColor: colors.border, borderWidth: 1, borderRadius: 12, alignItems: 'center' }}>
+
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+              <View style={{ flex: 1, borderColor: colors.border, borderWidth: 1, borderRadius: 14, padding: 14 }}>
+                <Text style={{ color: colors.muted, fontSize: 11 }}>Rating</Text>
+                <Text style={{ color: colors.text, fontSize: 20, fontWeight: '700' }}>★ {supplier.rating}</Text>
+              </View>
+              <View style={{ flex: 1, borderColor: colors.border, borderWidth: 1, borderRadius: 14, padding: 14 }}>
+                <Text style={{ color: colors.muted, fontSize: 11 }}>Reviews</Text>
+                <Text style={{ color: colors.text, fontSize: 20, fontWeight: '700' }}>{supplier.reviews}</Text>
+              </View>
+            </View>
+
+            {[
+              ['Analytics', '/analytics'],
+              ['Auto-bid rules', '/rules'],
+              ['Orders to fulfil', '/orders'],
+            ].map(([label, path]) => (
+              <TouchableOpacity
+                key={path}
+                onPress={() => router.push(path as any)}
+                style={{ marginTop: 12, padding: 15, borderColor: colors.border, borderWidth: 1, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+              >
+                <Text style={{ color: colors.text, fontWeight: '600' }}>{label}</Text>
+                <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+              </TouchableOpacity>
+            ))}
+
+            <TouchableOpacity onPress={signOut} style={{ marginTop: 20, padding: 14, borderColor: colors.border, borderWidth: 1, borderRadius: 12, alignItems: 'center' }}>
               <Text style={{ color: colors.muted }}>Sign out</Text>
             </TouchableOpacity>
           </View>

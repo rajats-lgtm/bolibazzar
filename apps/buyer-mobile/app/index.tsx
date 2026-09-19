@@ -6,7 +6,7 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Speech from 'expo-speech';
 import Logo from '../components/Logo';
-import { api, formatINR } from '../lib/api';
+import { api, post, formatINR } from '../lib/api';
 import { colors } from '../lib/theme';
 
 const EXAMPLES = [
@@ -23,7 +23,7 @@ export default function Home() {
   async function submit() {
     if (!text.trim()) return;
     setLoading(true);
-    const r = await api('/extract', { method: 'POST', body: JSON.stringify({ text }) });
+    const r = await post('/extract', { text });
     setLoading(false);
     if (!r.ok) { Alert.alert('AI failed', r.error || 'Try again'); return; }
     // Speak the summary

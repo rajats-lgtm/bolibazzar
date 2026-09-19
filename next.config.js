@@ -1,5 +1,10 @@
+const path = require('path');
+
 const nextConfig = {
   output: 'standalone',
+  // Pin the workspace root; a stray lockfile in the home directory otherwise
+  // makes Next trace files from there.
+  outputFileTracingRoot: path.join(__dirname),
   images: {
     unoptimized: true,
     remotePatterns: [
@@ -10,29 +15,31 @@ const nextConfig = {
   serverExternalPackages: ['mongodb'],
   webpack(config, { dev }) {
     if (dev) {
-      // Reduce CPU/memory from file watching
       config.watchOptions = {
-        poll: 2000, // check every 2 seconds
-        aggregateTimeout: 300, // wait before rebuilding
-        ignored: ['**/node_modules'],
+        aggregateTimeout: 300,
+        // The local mongod writes into .devdata continuously; watching it sends
+        // the dev server into a permanent rebuild loop.
+        ignored: ['**/node_modules/**', '**/.devdata/**', '**/.next/**', '**/apps/**'],
       };
     }
     return config;
   },
   onDemandEntries: {
-    maxInactiveAge: 10000,
-    pagesBufferLength: 2,
+    maxInactiveAge: 60 * 1000,
+    pagesBufferLength: 5,
   },
   async headers() {
+    // CORS for /api is handled per-request in the route handler, which echoes
+    // back only allowlisted origins — a wildcard here would break credentialed
+    // cookie auth and re-open the API to any site.
     return [
       {
         source: "/(.*)",
         headers: [
-          { key: "X-Frame-Options", value: "ALLOWALL" },
-          { key: "Content-Security-Policy", value: "frame-ancestors *;" },
-          { key: "Access-Control-Allow-Origin", value: process.env.CORS_ORIGINS || "*" },
-          { key: "Access-Control-Allow-Methods", value: "GET, POST, PUT, DELETE, OPTIONS" },
-          { key: "Access-Control-Allow-Headers", value: "*" },
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          { key: "Content-Security-Policy", value: "frame-ancestors 'self';" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
         ],
       },
     ];

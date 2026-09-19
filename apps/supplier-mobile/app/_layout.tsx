@@ -9,8 +9,8 @@ export default function RootLayout() {
       <StatusBar style="light" />
       <Stack screenOptions={{ contentStyle: { backgroundColor: colors.bg }, headerShown: false, animation: 'slide_from_right' }}>
         <Stack.Screen name="index" />
-        <Stack.Screen name="offers" />
-        <Stack.Screen name="supplier" />
+        <Stack.Screen name="request" />
+        <Stack.Screen name="orders" />
         <Stack.Screen name="profile" />
         <Stack.Screen name="analytics" />
         <Stack.Screen name="rules" />

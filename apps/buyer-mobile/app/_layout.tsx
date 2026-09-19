@@ -10,7 +10,7 @@ export default function RootLayout() {
       <Stack screenOptions={{ contentStyle: { backgroundColor: colors.bg }, headerShown: false, animation: 'slide_from_right' }}>
         <Stack.Screen name="index" />
         <Stack.Screen name="offers" />
-        <Stack.Screen name="supplier" />
+        <Stack.Screen name="orders" />
         <Stack.Screen name="profile" />
       </Stack>
     </GestureHandlerRootView>

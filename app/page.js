@@ -50,7 +50,25 @@ const PRODUCT_IMAGES = {
 };
 
 const formatINR = (n) => n == null || isNaN(Number(n)) ? '—' : '\u20B9' + Number(n).toLocaleString('en-IN');
-const api = (p, o) => fetch('/api' + p, o).then(r => r.json().then(j => ({ ok: r.ok, ...j })));
+/**
+ * API helper. Session cookies are httpOnly and same-origin, so they ride along
+ * automatically; we only need to survive a non-JSON error page without throwing.
+ */
+async function api(path, options = {}) {
+  try {
+    const response = await fetch('/api' + path, {
+      credentials: 'same-origin',
+      ...options,
+      headers: options.body ? { 'Content-Type': 'application/json', ...(options.headers || {}) } : options.headers,
+    });
+    const data = await response.json().catch(() => ({}));
+    return { ok: response.ok, status: response.status, ...data };
+  } catch {
+    return { ok: false, status: 0, error: 'Network error — is the server running?' };
+  }
+}
+const post = (path, body) => api(path, { method: 'POST', body: JSON.stringify(body || {}) });
+const del = (path, body) => api(path, { method: 'DELETE', body: JSON.stringify(body || {}) });
 
 // ============ BOLIBAZZAR LOGO ============
 function BoliBazzarLogo({ size = 32, showWordmark = false, className = '' }) {
@@ -139,46 +157,190 @@ function ThemeToggle() {
   );
 }
 
-// ============ LOGIN MODAL (lightweight Google-style) ============
-function LoginModal({ open, onOpenChange, onLogin }) {
-  const [name, setName] = useState('');
+// ============ GUEST REQUEST TRACKING ============
+// Requests made before signing in are remembered locally, then claimed onto the
+// account at login so nothing is lost.
+const GUEST_KEY = 'bb_guest_requests';
+function rememberGuestRequest(id) {
+  try {
+    const list = JSON.parse(localStorage.getItem(GUEST_KEY) || '[]');
+    if (!list.includes(id)) localStorage.setItem(GUEST_KEY, JSON.stringify([...list, id].slice(-20)));
+  } catch {}
+}
+function takeGuestRequests() {
+  try {
+    const list = JSON.parse(localStorage.getItem(GUEST_KEY) || '[]');
+    localStorage.removeItem(GUEST_KEY);
+    return list;
+  } catch { return []; }
+}
+
+// ============ LOGIN MODAL (one-time passcode) ============
+function LoginModal({ open, onOpenChange, onLogin, role = 'buyer' }) {
+  const [step, setStep] = useState('identify');
   const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
+  const [code, setCode] = useState('');
+  const [devCode, setDevCode] = useState(null);
   const [loading, setLoading] = useState(false);
-  async function submit() {
-    if (!name.trim() || !email.trim()) return toast.error('Name and email required');
+  const [cooldown, setCooldown] = useState(0);
+
+  useEffect(() => {
+    if (!open) { setStep('identify'); setCode(''); setDevCode(null); setCooldown(0); }
+  }, [open]);
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = setTimeout(() => setCooldown(c => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [cooldown]);
+
+  async function requestCode() {
+    if (!email.trim()) return toast.error('Enter your email address');
     setLoading(true);
-    const r = await api('/auth/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, email }) });
-    if (r.ok) { onLogin(r.user); onOpenChange(false); toast.success('Welcome, ' + r.user.name.split(' ')[0]); }
-    else toast.error(r.error || 'Login failed');
+    const r = await post('/auth/otp/request', { email, role });
     setLoading(false);
+    if (!r.ok) return toast.error(r.error || 'Could not send the code');
+    setStep('verify');
+    setCooldown(30);
+    setDevCode(r.dev_code || null);
+    toast.success(r.dev_code ? 'Code generated (dev mode)' : 'Code sent to ' + email);
   }
+
+  async function verify() {
+    if (code.trim().length !== 6) return toast.error('Enter the 6-digit code');
+    setLoading(true);
+    const r = await post('/auth/otp/verify', {
+      email, code: code.trim(), role, name: name.trim() || undefined,
+      claim_request_ids: role === 'buyer' ? takeGuestRequests() : undefined,
+    });
+    setLoading(false);
+    if (!r.ok) return toast.error(r.error || 'Could not verify the code');
+    onLogin(role === 'supplier' ? r.supplier : r.user);
+    onOpenChange(false);
+    const who = role === 'supplier' ? r.supplier?.business_name : r.user?.name;
+    toast.success('Welcome, ' + String(who || '').split(' ')[0]);
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md bg-background/95 border-white/10">
         <DialogHeader>
-          <DialogTitle className="text-2xl">Sign in to BoliBazzar</DialogTitle>
-          <DialogDescription>Save your requests, chat with suppliers, and pay securely.</DialogDescription>
+          <DialogTitle className="text-2xl">
+            {role === 'supplier' ? 'Supplier sign in' : 'Sign in to BoliBazzar'}
+          </DialogTitle>
+          <DialogDescription>
+            {step === 'identify'
+              ? 'We’ll send a 6-digit code to your email. No password needed.'
+              : `Enter the code we sent to ${email}`}
+          </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
-          <Button variant="outline" className="w-full h-12 gap-3 border-white/20 bg-white/5 hover:bg-white/10" onClick={() => { setEmail('demo@bolibazaar.in'); setName('Demo Buyer'); setTimeout(submit, 100); }}>
-            <svg className="w-5 h-5" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
-            Sign in with Google (demo)
-          </Button>
-          <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            <div className="flex-1 h-px bg-white/10" /> or continue with email <div className="flex-1 h-px bg-white/10" />
+
+        {step === 'identify' ? (
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-xs text-muted-foreground">Email address</label>
+              <Input
+                value={email} onChange={e => setEmail(e.target.value)} type="email" autoFocus
+                onKeyDown={e => e.key === 'Enter' && requestCode()}
+                placeholder={role === 'supplier' ? 'store@brand.com' : 'you@example.com'}
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs text-muted-foreground">
+                {role === 'supplier' ? 'Business name (new accounts)' : 'Full name (new accounts)'}
+              </label>
+              <Input value={name} onChange={e => setName(e.target.value)} placeholder={role === 'supplier' ? 'Croma Retail' : 'Rohan Kumar'} />
+            </div>
+            <Button className="w-full bg-gradient-to-br from-indigo-600 to-orange-500" onClick={requestCode} disabled={loading}>
+              {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Mail className="w-4 h-4 mr-2" />}Send code
+            </Button>
           </div>
-          <div className="space-y-2">
-            <label className="text-xs text-muted-foreground">Full name</label>
-            <Input value={name} onChange={e => setName(e.target.value)} placeholder="Rohan Kumar" />
+        ) : (
+          <div className="space-y-4">
+            {devCode && (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2.5 text-sm">
+                <div className="text-amber-300 text-xs uppercase tracking-wider">Dev mode</div>
+                <div className="font-mono text-xl tracking-[0.3em] mt-1">{devCode}</div>
+                <div className="text-xs text-muted-foreground mt-1">Shown because OTP_DEV_MODE is on. Turn it off for real delivery.</div>
+              </div>
+            )}
+            <div className="space-y-2">
+              <label className="text-xs text-muted-foreground">6-digit code</label>
+              <Input
+                value={code} autoFocus inputMode="numeric" maxLength={6}
+                onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                onKeyDown={e => e.key === 'Enter' && verify()}
+                placeholder="000000" className="text-center text-2xl tracking-[0.4em] font-mono h-14"
+              />
+            </div>
+            <Button className="w-full bg-gradient-to-br from-indigo-600 to-orange-500" onClick={verify} disabled={loading || code.length !== 6}>
+              {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Check className="w-4 h-4 mr-2" />}Verify &amp; continue
+            </Button>
+            <div className="flex items-center justify-between text-xs">
+              <button className="text-muted-foreground hover:text-foreground" onClick={() => setStep('identify')}>Use a different email</button>
+              <button className="text-fuchsia-400 hover:text-fuchsia-300 disabled:opacity-40" disabled={cooldown > 0} onClick={requestCode}>
+                {cooldown > 0 ? `Resend in ${cooldown}s` : 'Resend code'}
+              </button>
+            </div>
           </div>
-          <div className="space-y-2">
-            <label className="text-xs text-muted-foreground">Email</label>
-            <Input value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" type="email" />
-          </div>
-          <Button className="w-full" onClick={submit} disabled={loading}>{loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}Continue</Button>
-        </div>
+        )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ============ NOTIFICATION BELL ============
+function NotificationBell({ enabled }) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState([]);
+  const [unread, setUnread] = useState(0);
+
+  async function load() {
+    if (!enabled) { setItems([]); setUnread(0); return; }
+    const r = await api('/notifications');
+    if (r.ok) { setItems(r.notifications || []); setUnread(r.unread || 0); }
+  }
+  useEffect(() => {
+    load();
+    if (!enabled) return;
+    const t = setInterval(load, 8000);
+    return () => clearInterval(t);
+  }, [enabled]);
+
+  async function openPanel() {
+    setOpen(o => !o);
+    if (!open && unread > 0) { await post('/notifications/read', {}); setUnread(0); }
+  }
+  if (!enabled) return null;
+
+  return (
+    <div className="relative">
+      <Button variant="ghost" size="sm" className="w-9 h-9 p-0 relative" onClick={openPanel} title="Notifications">
+        <Bell className="w-4 h-4" />
+        {unread > 0 && (
+          <span className="absolute -top-0.5 -right-0.5 min-w-[17px] h-[17px] px-1 rounded-full bg-gradient-to-br from-fuchsia-500 to-orange-500 text-[10px] font-semibold grid place-items-center text-white">
+            {unread > 9 ? '9+' : unread}
+          </span>
+        )}
+      </Button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 mt-2 w-80 max-h-[26rem] overflow-y-auto rounded-2xl border border-white/10 bg-background/95 backdrop-blur-xl shadow-2xl z-50">
+            <div className="p-3 border-b border-white/10 text-sm font-semibold">Notifications</div>
+            {items.length === 0 ? (
+              <div className="p-6 text-center text-sm text-muted-foreground">Nothing yet.</div>
+            ) : items.map(n => (
+              <div key={n.id} className={`p-3 border-b border-white/5 ${n.read ? '' : 'bg-fuchsia-500/[0.04]'}`}>
+                <div className="text-sm font-medium">{n.title}</div>
+                <div className="text-xs text-muted-foreground mt-0.5">{n.body}</div>
+                <div className="text-[10px] text-muted-foreground/70 mt-1">{new Date(n.created_at).toLocaleString('en-IN')}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -187,15 +349,21 @@ function SupplierSignupModal({ open, onOpenChange, onDone }) {
   const [f, setF] = useState({ business_name: '', gst: '', email: '', phone: '', city: 'Mumbai', pincode: '', address: '', supplier_type: 'retail_store', brand_authorisations: '' });
   const [loading, setLoading] = useState(false);
   async function submit() {
-    if (!f.business_name || !f.gst || !f.email) return toast.error('Business, GST, email required');
+    if (!f.business_name || !f.gst || !f.email) return toast.error('Business name, GSTIN and email are required');
     setLoading(true);
-    const r = await api('/suppliers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...f, brand_authorisations: f.brand_authorisations.split(',').map(s => s.trim()).filter(Boolean) }) });
+    const r = await post('/suppliers', {
+      ...f,
+      brand_authorisations: f.brand_authorisations.split(',').map(s => s.trim()).filter(Boolean),
+    });
     if (r.ok) {
-      if (r.supplier.gst_valid) toast.success('Supplier verified & approved! You can now receive live requests.');
-      else toast.warning('Submitted for manual review (GST format check failed).');
+      // A valid GSTIN format is a sanity check, not verification — an admin
+      // still approves the account before it can bid.
+      if (r.supplier.status === 'approved') toast.success('Your business is approved. Live requests are now visible.');
+      else if (r.supplier.gst_format_ok) toast.success('Details saved. An admin will review and approve your account shortly.');
+      else toast.warning('Saved, but that GSTIN format looks wrong. Please double-check it.');
       onDone(r.supplier);
       onOpenChange(false);
-    } else toast.error(r.error);
+    } else toast.error(r.error || 'Could not save those details');
     setLoading(false);
   }
   return (
@@ -203,7 +371,7 @@ function SupplierSignupModal({ open, onOpenChange, onDone }) {
       <DialogContent className="max-w-lg bg-background/95 border-white/10 max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-2xl"><Building2 className="w-5 h-5 text-fuchsia-400" />Become a verified supplier</DialogTitle>
-          <DialogDescription>Get live buyer requests from across India. Verification is instant with a valid GSTIN.</DialogDescription>
+          <DialogDescription>Get live buyer requests from across India. Submit your GSTIN and an admin approves your account, usually the same day.</DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-2 gap-3">
           <div className="col-span-2">
@@ -268,7 +436,7 @@ function ChatSheet({ offer, user, onClose }) {
     setMessages(r.messages || []);
     if ((r.messages || []).length) sinceRef.current = r.messages[r.messages.length - 1].created_at;
     // mark read
-    await api(`/messages/${offer.id}/read`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sender: 'buyer' }) });
+    await post(`/messages/${offer.id}/read`);
   }
   async function poll() {
     const url = sinceRef.current ? `/messages/${offer.id}?since=${encodeURIComponent(sinceRef.current)}` : `/messages/${offer.id}`;
@@ -288,22 +456,15 @@ function ChatSheet({ offer, user, onClose }) {
   async function send() {
     if (!text.trim()) return;
     setSending(true);
-    const r = await api('/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ offer_id: offer.id, sender: 'buyer', sender_name: user?.name || 'Buyer', text }) });
+    // The sender is derived from the session server-side, so nobody can post as
+    // someone else.
+    const r = await post('/messages', { offer_id: offer.id, text });
     if (r.ok) {
       setMessages(prev => [...prev, r.message]);
       sinceRef.current = r.message.created_at;
       setText('');
-      // Auto-reply from supplier for demo aha
-      setTimeout(async () => {
-        const replies = [
-          `Sure, we can do that. Available at our store today.`,
-          `Let me check with my manager and get back within 10 minutes.`,
-          `Yes, delivery is possible. Confirm your address please.`,
-          `That price includes GST. Free case + tempered glass included.`,
-          `Can offer additional ₹500 off if you confirm in next 2 hours!`,
-        ];
-        await api('/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ offer_id: offer.id, sender: 'supplier', sender_name: offer.supplier_name, text: replies[Math.floor(Math.random()*replies.length)] }) });
-      }, 2200 + Math.random() * 2000);
+    } else {
+      toast.error(r.error || 'Could not send that message');
     }
     setSending(false);
   }
@@ -354,7 +515,7 @@ function ChatSheet({ offer, user, onClose }) {
 }
 
 // ============ SUCCESS CELEBRATION (confetti) ============
-function SuccessCelebration({ offer, tier, shareOnWhatsApp, onClose }) {
+function SuccessCelebration({ offer, tier, cashback, shareOnWhatsApp, onClose }) {
   useEffect(() => {
     const colors = ['#4338ca', '#e11d48', '#f97316', '#a21caf', '#22d3ee', '#f59e0b'];
     // Big burst
@@ -375,7 +536,7 @@ function SuccessCelebration({ offer, tier, shareOnWhatsApp, onClose }) {
       <div className="mt-4 text-xl font-semibold">Payment successful 🎉</div>
       <div className="text-sm text-muted-foreground">Order with {offer.supplier_name} confirmed. Delivery in {offer.delivery_days === 0 ? 'a few hours' : `${offer.delivery_days} day(s)`}.</div>
       <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs">
-        <Wallet className="w-3 h-3" />+{formatINR(Math.round(offer.price_inr * ((tier?.cashback_pct || 2) / 100)))} {tier?.label || 'Silver'} cashback added to wallet
+        <Wallet className="w-3 h-3" />+{formatINR(cashback ?? Math.round(offer.price_inr * ((tier?.cashback_pct || 2) / 100)))} {tier?.label || 'Silver'} cashback added to wallet
       </div>
       <div className="mt-5 grid grid-cols-2 gap-2">
         <Button variant="outline" className="border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10" onClick={shareOnWhatsApp}>
@@ -392,37 +553,67 @@ function PaymentModal({ offer, user, wallet, tier, onClose, onPaid, onReloadWall
   const [step, setStep] = useState('review');
   const [creating, setCreating] = useState(false);
   const [useWallet, setUseWallet] = useState(false);
+  const [error, setError] = useState('');
+  const [cashback, setCashback] = useState(null);
   const walletBal = wallet?.balance_inr || 0;
   const walletApply = useWallet ? Math.min(walletBal, Math.max(0, offer.price_inr - 1)) : 0;
   const finalAmount = offer.price_inr - walletApply;
 
+  async function settle(payload) {
+    const v = await post('/payments/verify', payload);
+    if (v.ok) {
+      setStep('success');
+      setCashback(v.cashback_inr ?? null);
+      onPaid();
+      onReloadWallet?.();
+    } else {
+      setError(v.error || 'We could not confirm that payment.');
+      setStep('fail');
+    }
+  }
+
   async function pay() {
     setCreating(true);
-    const r = await api('/payments/order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ offer_id: offer.id, amount_inr: offer.price_inr, buyer_email: user?.email || null, wallet_apply_inr: walletApply }) });
-    if (!r.ok) { toast.error(r.error || 'Order creation failed'); setCreating(false); return; }
+    setError('');
+    // The price comes from the stored offer on the server — never from here.
+    const r = await post('/payments/order', { offer_id: offer.id, wallet_apply_inr: walletApply });
+    if (!r.ok) {
+      toast.error(r.error || 'Could not start the payment');
+      setCreating(false);
+      return;
+    }
+
+    // Mock / test-mode orders settle straight through, with no gateway.
     if (r.mocked || !r.key_id) {
       setStep('processing');
-      setTimeout(async () => {
-        const v = await api('/payments/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ razorpay_order_id: r.order_id, razorpay_payment_id: 'pay_mock_' + Date.now(), razorpay_signature: 'mock' }) });
-        if (v.ok) { setStep('success'); onPaid(); onReloadWallet?.(); } else setStep('fail');
-      }, 1600);
-      setCreating(false); return;
+      setCreating(false);
+      setTimeout(() => settle({
+        razorpay_order_id: r.order_id,
+        razorpay_payment_id: 'pay_test_' + Date.now(),
+        razorpay_signature: 'test',
+      }), 1400);
+      return;
     }
-    if (!window.Razorpay) { toast.error('Razorpay script not loaded'); setCreating(false); return; }
-    const options = {
+
+    if (!window.Razorpay) {
+      toast.error('Razorpay checkout could not load. Check your connection.');
+      setCreating(false);
+      return;
+    }
+    const checkout = new window.Razorpay({
       key: r.key_id, amount: r.amount, currency: r.currency, order_id: r.order_id,
-      name: 'BoliBazzar', description: `${offer.supplier_name} · ${formatINR(offer.price_inr)}`,
+      name: 'BoliBazzar', description: `${offer.supplier_name} · ${formatINR(r.final_amount_inr)}`,
       prefill: { name: user?.name || 'Buyer', email: user?.email || '' },
       theme: { color: '#a21caf' },
-      handler: async (resp) => {
-        setStep('processing');
-        const v = await api('/payments/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(resp) });
-        if (v.ok) { setStep('success'); onPaid(); onReloadWallet?.(); } else setStep('fail');
-      },
-    };
-    const rzp = new window.Razorpay(options);
-    rzp.on('payment.failed', () => setStep('fail'));
-    rzp.open(); setCreating(false);
+      handler: (response) => { setStep('processing'); settle(response); },
+      modal: { ondismiss: () => setCreating(false) },
+    });
+    checkout.on('payment.failed', (e) => {
+      setError(e?.error?.description || 'The payment was declined.');
+      setStep('fail');
+    });
+    checkout.open();
+    setCreating(false);
   }
 
   function shareOnWhatsApp() {
@@ -476,13 +667,14 @@ function PaymentModal({ offer, user, wallet, tier, onClose, onPaid, onReloadWall
           </div>
         )}
         {step === 'success' && (
-          <SuccessCelebration offer={offer} tier={tier} shareOnWhatsApp={shareOnWhatsApp} onClose={onClose} />
+          <SuccessCelebration offer={offer} tier={tier} cashback={cashback} shareOnWhatsApp={shareOnWhatsApp} onClose={onClose} />
         )}
         {step === 'fail' && (
           <div className="py-10 text-center">
             <div className="w-16 h-16 rounded-full bg-red-500/20 border border-red-500/40 grid place-items-center mx-auto"><X className="w-8 h-8 text-red-400" /></div>
             <div className="mt-4 text-xl font-semibold">Payment failed</div>
-            <Button className="mt-6 w-full" onClick={() => setStep('review')}>Try again</Button>
+            {error && <div className="mt-2 text-sm text-muted-foreground px-4">{error}</div>}
+            <Button className="mt-6 w-full" onClick={() => { setError(''); setStep('review'); }}>Try again</Button>
           </div>
         )}
       </DialogContent>
@@ -689,19 +881,19 @@ function OfferCard({ offer, onAccept, onChat, onTrack, bestPrice }) {
 }
 
 // ============ BIDDING COUNTDOWN ============
-function BiddingCountdown({ requestId, onTick, onDone }) {
-  const [seconds, setSeconds] = useState(60);
+function BiddingCountdown({ auction }) {
+  // Tick the displayed clock locally between server polls so it counts smoothly.
+  const [seconds, setSeconds] = useState(auction?.seconds_remaining ?? 0);
+  useEffect(() => { setSeconds(auction?.seconds_remaining ?? 0); }, [auction?.seconds_remaining]);
   useEffect(() => {
-    if (seconds <= 0) { onDone(); return; }
-    // tick api every ~12s (drops prices)
-    if (seconds === 60 || seconds === 48 || seconds === 36 || seconds === 24 || seconds === 12) {
-      api(`/requests/${requestId}/tick`, { method: 'POST' }).then(r => { if (r.ok) onTick(r); });
-    }
-    const t = setTimeout(() => setSeconds(s => s - 1), 1000);
+    if (seconds <= 0) return;
+    const t = setTimeout(() => setSeconds(s => Math.max(0, s - 1)), 1000);
     return () => clearTimeout(t);
-  }, [seconds, requestId]);
-  const pct = (seconds / 60) * 100;
-  const hot = seconds < 15;
+  }, [seconds]);
+
+  const total = auction?.window_seconds || 120;
+  const pct = Math.max(0, Math.min(100, (seconds / total) * 100));
+  const hot = seconds < 20;
   return (
     <div className={`rounded-2xl border p-4 mb-6 ${hot ? 'border-red-500/40 bg-red-500/5' : 'border-amber-500/30 bg-amber-500/[0.03]'}`}>
       <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
@@ -741,13 +933,18 @@ function BiddingClosedBanner() {
 }
 
 // ============ SUPPLIER ANALYTICS ============
-function SupplierAnalytics({ email }) {
+function SupplierAnalytics({ supplier }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [inputEmail, setInputEmail] = useState(email || 'test@apple.in');
-  const [q, setQ] = useState(email || 'test@apple.in');
 
-  useEffect(() => { (async () => { setLoading(true); const r = await api(`/analytics/supplier/${encodeURIComponent(q)}`); setData(r); setLoading(false); })(); }, [q]);
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      const r = await api('/analytics/supplier');
+      if (r.ok) setData(r);
+      setLoading(false);
+    })();
+  }, [supplier?.id]);
 
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5 mb-6">
@@ -756,21 +953,18 @@ function SupplierAnalytics({ email }) {
           <BarChart3 className="w-5 h-5 text-fuchsia-400" />
           <div>
             <div className="font-semibold">Your analytics</div>
-            <div className="text-xs text-muted-foreground">Real-time supplier performance</div>
+            <div className="text-xs text-muted-foreground">Live performance for {supplier?.business_name}</div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Input value={inputEmail} onChange={e => setInputEmail(e.target.value)} placeholder="your supplier email" className="w-56 h-9" />
-          <Button size="sm" onClick={() => setQ(inputEmail)}>View</Button>
-        </div>
+        {data?.stats?.revenue_inr > 0 && (
+          <div className="text-right">
+            <div className="text-xs text-muted-foreground uppercase tracking-wider">Revenue</div>
+            <div className="text-xl font-semibold text-emerald-400">{formatINR(data.stats.revenue_inr)}</div>
+          </div>
+        )}
       </div>
       {loading ? <div className="text-muted-foreground text-sm">Loading...</div> : data && (
         <>
-          {data.supplier ? (
-            <div className="mb-4 text-sm text-muted-foreground">Analytics for <span className="text-foreground font-medium">{data.supplier.business_name}</span> · GST {data.supplier.gst_valid ? 'verified' : 'pending'}</div>
-          ) : (
-            <div className="mb-4 text-sm text-muted-foreground">No supplier registered for this email yet. Register above to start receiving requests.</div>
-          )}
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
             <StatCard icon={<Package className="w-4 h-4 text-cyan-400" />} label="Open requests" value={data.stats.open_requests} sub={`${data.stats.total_requests_available} total`} />
             <StatCard icon={<Send className="w-4 h-4 text-fuchsia-400" />} label="Offers submitted" value={data.stats.offers_submitted} />
@@ -815,8 +1009,8 @@ function StatCard({ icon, label, value, sub }) {
   );
 }
 
-function OffersView({ request, offers, onAccept, onChat, onTrack, refreshing, onTick, user }) {
-  const [bidClosed, setBidClosed] = useState(request?.status === 'closed');
+function OffersView({ request, offers, auction, onAccept, onChat, onTrack, refreshing, user }) {
+  const bidClosed = !auction?.live || request?.status === 'closed';
   const bestPrice = offers.length ? Math.min(...offers.map(o => o.price_inr)) : null;
   return (
     <div className="container mx-auto px-6 py-12">
@@ -836,9 +1030,7 @@ function OffersView({ request, offers, onAccept, onChat, onTrack, refreshing, on
         <div className="text-right"><div className="text-sm text-muted-foreground">Offers received</div><div className="text-3xl font-bold">{offers.length}</div></div>
       </div>
 
-      {!bidClosed && offers.length > 0 && request.status !== 'closed' && (
-        <BiddingCountdown requestId={request.id} onTick={(r) => onTick(r.offers)} onDone={() => setBidClosed(true)} />
-      )}
+      {!bidClosed && <BiddingCountdown auction={auction} />}
       {bidClosed && request.status !== 'closed' && <BiddingClosedBanner />}
       <GroupBuyBanner request={request} user={user} />
 
@@ -904,7 +1096,7 @@ function FAQ() {
 }
 function Footer() { return (<footer className="border-t border-white/10 mt-16"><div className="container mx-auto px-6 py-10 flex flex-col md:flex-row items-center justify-between gap-4"><div className="flex items-center gap-2"><BoliBazzarLogo size={32} showWordmark /><span className="text-muted-foreground text-sm hidden md:inline">· You Ask. Sellers Compete. You Win.</span></div><div className="text-xs text-muted-foreground">© 2025 BoliBazzar Technologies · Made for Bharat</div></div></footer>); }
 
-function Navbar({ view, setView, user, onLogin, onLogout, onSupplierSignup, wallet, tier }) {
+function Navbar({ view, setView, user, booting, onLogin, onLogout, onSupplierSignup, wallet, tier }) {
   return (
     <header className="sticky top-0 z-40 backdrop-blur-xl bg-background/60 border-b border-white/5">
       <div className="container mx-auto px-6 h-16 flex items-center justify-between">
@@ -920,9 +1112,11 @@ function Navbar({ view, setView, user, onLogin, onLogout, onSupplierSignup, wall
         <nav className="hidden md:flex items-center gap-1">
           <Button variant={view === 'home' ? 'secondary' : 'ghost'} size="sm" onClick={() => setView('home')}><ShoppingBag className="w-4 h-4 mr-2" />Buy</Button>
           {user && <Button variant={view === 'my_requests' ? 'secondary' : 'ghost'} size="sm" onClick={() => setView('my_requests')}><ClipboardList className="w-4 h-4 mr-2" />My requests</Button>}
+          {user && <Button variant={view === 'orders' ? 'secondary' : 'ghost'} size="sm" onClick={() => setView('orders')}><Package className="w-4 h-4 mr-2" />Orders</Button>}
           <Button variant={view === 'supplier' ? 'secondary' : 'ghost'} size="sm" onClick={() => setView('supplier')}><Store className="w-4 h-4 mr-2" />Supplier</Button>
         </nav>
         <div className="flex items-center gap-2">
+          <NotificationBell enabled={!!user} />
           <ThemeToggle />
           {user && wallet && wallet.balance_inr > 0 && (
             <button onClick={() => setView('wallet')} className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-sm hover:bg-emerald-500/20 transition">
@@ -942,11 +1136,14 @@ function Navbar({ view, setView, user, onLogin, onLogout, onSupplierSignup, wall
                 <DropdownMenuLabel><div className="flex items-center gap-2">{user.name}{tier && <TierBadge tier={tier} small />}</div><div className="text-xs text-muted-foreground font-normal">{user.email}</div></DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => setView('my_requests')}><ClipboardList className="w-4 h-4 mr-2" />My requests</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setView('orders')}><Package className="w-4 h-4 mr-2" />My orders</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setView('wallet')}><Wallet className="w-4 h-4 mr-2" />Wallet <span className="ml-auto text-xs text-emerald-400">{formatINR(wallet?.balance_inr || 0)}</span></DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setView('stationery')}><Mail className="w-4 h-4 mr-2" />Emails preview</DropdownMenuItem>
                 <DropdownMenuItem onClick={onLogout}><LogOut className="w-4 h-4 mr-2" />Sign out</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+          ) : booting ? (
+            <div className="h-8 w-20 rounded-md bg-white/5 animate-pulse" />
           ) : (
             <Button size="sm" onClick={onLogin} className="bg-white text-black hover:bg-white/90">Sign in</Button>
           )}
@@ -956,9 +1153,80 @@ function Navbar({ view, setView, user, onLogin, onLogout, onSupplierSignup, wall
   );
 }
 
+// ============ ORDERS ============
+const STAGE_LABELS = {
+  confirmed: 'Order confirmed', packed: 'Packed at store', shipped: 'Shipped',
+  out_for_delivery: 'Out for delivery', delivered: 'Delivered',
+};
+
+function OrdersView({ onTrack, onReview }) {
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  async function load() {
+    const r = await api('/orders');
+    if (r.ok) setOrders(r.orders || []);
+    setLoading(false);
+  }
+  useEffect(() => { load(); const t = setInterval(load, 20000); return () => clearInterval(t); }, []);
+
+  return (
+    <div className="container mx-auto px-6 py-12">
+      <Badge variant="outline" className="mb-3"><Package className="w-3 h-3 mr-1" />Your orders</Badge>
+      <h1 className="text-4xl font-semibold">Orders &amp; deliveries</h1>
+      <p className="text-muted-foreground mt-2">Everything you&apos;ve bought, and exactly where it is right now.</p>
+
+      {loading ? (
+        <div className="mt-8 text-muted-foreground">Loading...</div>
+      ) : orders.length === 0 ? (
+        <div className="mt-10 rounded-2xl border border-white/10 bg-white/[0.02] p-12 text-center text-muted-foreground">
+          No orders yet. Post a requirement and accept a winning offer.
+        </div>
+      ) : (
+        <div className="mt-8 grid gap-3">
+          {orders.map(o => {
+            const delivered = o.stage === 'delivered';
+            return (
+              <div key={o.id} className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
+                <div className="flex items-start justify-between gap-4 flex-wrap">
+                  <div className="flex-1 min-w-[240px]">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <div className={`h-2 w-2 rounded-full ${delivered ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+                      {STAGE_LABELS[o.stage] || o.stage} · {o.tracking_id}
+                    </div>
+                    <div className="text-lg font-semibold mt-1">{o.product}</div>
+                    <div className="text-sm text-muted-foreground mt-0.5">
+                      {o.supplier_name} · {o.from_city} → {o.to_city}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Badge variant="outline">{formatINR(o.amount_inr)}</Badge>
+                      <Badge variant="outline"><Truck className="w-3 h-3 mr-1" />{o.courier}</Badge>
+                      {o.wallet_used_inr > 0 && <Badge variant="outline" className="text-emerald-300 border-emerald-500/30">Wallet −{formatINR(o.wallet_used_inr)}</Badge>}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" className="border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/10" onClick={() => onTrack({ id: o.offer_id, supplier_name: o.supplier_name })}>
+                      <Truck className="w-4 h-4 mr-2" />Track
+                    </Button>
+                    {delivered && (
+                      <Button size="sm" onClick={() => onReview({ id: o.offer_id, supplier_name: o.supplier_name, price_inr: o.amount_inr })}>
+                        <Star className="w-4 h-4 mr-2" />Review
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MyRequests({ user, onOpen }) {
   const [reqs, setReqs] = useState([]); const [loading, setLoading] = useState(true);
-  useEffect(() => { (async () => { const r = await api(`/me/${encodeURIComponent(user.email)}`); setReqs(r.requests || []); setLoading(false); })(); }, [user.email]);
+  useEffect(() => { (async () => { const r = await api('/me'); setReqs(r.requests || []); setLoading(false); })(); }, [user.email]);
   return (
     <div className="container mx-auto px-6 py-12">
       <Badge variant="outline" className="mb-3"><ClipboardList className="w-3 h-3 mr-1" />Your requests</Badge>
@@ -985,38 +1253,170 @@ function MyRequests({ user, onOpen }) {
   );
 }
 
-function SupplierDashboard({ onSignup, user }) {
-  const [requests, setRequests] = useState([]); const [loading, setLoading] = useState(true); const [selected, setSelected] = useState(null);
-  const [form, setForm] = useState({ supplier_name: 'Croma - Andheri', price_inr: '', delivery_days: '2', delivery_note: 'Next-day delivery', warranty: '1 year manufacturer', rating: '4.6', reviews: '1200', validity_hours: '24', extras: '', message: '' });
+function SupplierDashboard({ onSignup }) {
+  const [supplier, setSupplier] = useState(null);
+  const [booting, setBooting] = useState(true);
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [requests, setRequests] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(null);
+  const [form, setForm] = useState({ price_inr: '', delivery_days: '2', delivery_note: 'Next-day delivery', warranty: '1 year manufacturer', validity_hours: '24', extras: '', message: '' });
   const [submitting, setSubmitting] = useState(false);
-  async function load() { setLoading(true); const r = await api('/requests'); setRequests(r.requests || []); setLoading(false); }
-  useEffect(() => { load(); }, []);
-  async function submitOffer() { if (!selected) return; setSubmitting(true); const r = await api(`/requests/${selected.id}/offers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) }); if (r.ok) { toast.success('Offer sent to buyer'); setSelected(null); } else toast.error('Failed'); setSubmitting(false); }
-  function openMyStore() {
-    const email = user?.email || 'test@apple.in';
-    const url = `${window.location.origin}/?store=${encodeURIComponent(email)}`;
-    window.location.href = url;
+
+  async function loadSession() {
+    const s = await api('/auth/session');
+    setSupplier(s.supplier || null);
+    setBooting(false);
   }
+  useEffect(() => { loadSession(); }, []);
+
+  async function load() {
+    if (!supplier) { setLoading(false); return; }
+    setLoading(true);
+    const [feed, ord] = await Promise.all([api('/requests'), api('/orders')]);
+    if (feed.ok) setRequests(feed.requests || []);
+    if (ord.ok) setOrders(ord.orders || []);
+    setLoading(false);
+  }
+  useEffect(() => { load(); }, [supplier?.id]);
+  // Keep the feed fresh so new buyer requests appear without a refresh.
+  useEffect(() => {
+    if (!supplier) return;
+    const t = setInterval(load, 12000);
+    return () => clearInterval(t);
+  }, [supplier?.id]);
+
+  async function submitOffer() {
+    if (!selected) return;
+    setSubmitting(true);
+    const r = await post(`/requests/${selected.id}/offers`, {
+      ...form,
+      price_inr: Number(form.price_inr),
+      delivery_days: Number(form.delivery_days),
+      validity_hours: Number(form.validity_hours),
+    });
+    setSubmitting(false);
+    if (r.ok) {
+      toast.success(r.updated ? 'Your bid was updated' : 'Offer sent to the buyer');
+      setSelected(null);
+      load();
+    } else {
+      toast.error(r.error || 'Could not send that offer');
+    }
+  }
+
+  async function advance(order, stage) {
+    const r = await post(`/orders/${order.id}/stage`, { stage });
+    if (r.ok) { toast.success('Marked ' + stage.replace(/_/g, ' ')); load(); }
+    else toast.error(r.error || 'Could not update that order');
+  }
+
+  async function signOut() {
+    await api('/auth/session', { method: 'DELETE', body: JSON.stringify({ role: 'supplier' }) });
+    setSupplier(null); setRequests([]); setOrders([]);
+  }
+
+  // --- not signed in -------------------------------------------------------
+  if (booting) return <div className="container mx-auto px-6 py-24 text-center text-muted-foreground">Loading supplier console...</div>;
+
+  if (!supplier) {
+    return (
+      <div className="container mx-auto px-6 py-24">
+        <div className="max-w-lg mx-auto text-center">
+          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-indigo-500/20 to-orange-500/20 border border-white/10 grid place-items-center mx-auto">
+            <Store className="w-7 h-7 text-fuchsia-400" />
+          </div>
+          <h1 className="text-3xl font-semibold mt-5">Supplier console</h1>
+          <p className="text-muted-foreground mt-2">Sign in to see live buyer requests and bid on them. New here? Register your business to get verified.</p>
+          <div className="mt-6 flex gap-2 justify-center">
+            <Button className="bg-gradient-to-br from-indigo-600 to-orange-500" onClick={() => setLoginOpen(true)}>Supplier sign in</Button>
+            <Button variant="outline" className="border-fuchsia-500/40" onClick={onSignup}><Building2 className="w-4 h-4 mr-2" />Register business</Button>
+          </div>
+        </div>
+        <LoginModal open={loginOpen} onOpenChange={setLoginOpen} role="supplier" onLogin={(s) => { setSupplier(s); }} />
+      </div>
+    );
+  }
+
+  const pendingApproval = supplier.status !== 'approved';
+
   return (
     <div className="container mx-auto px-6 py-12">
       <div className="flex items-start justify-between gap-4 flex-wrap mb-8">
-        <div><Badge variant="outline" className="mb-3"><Store className="w-3 h-3 mr-1" />Supplier dashboard</Badge><h1 className="text-4xl font-semibold">Incoming buyer requests</h1><p className="text-muted-foreground mt-2">Live requirements from verified buyers. Submit your best offer to win.</p></div>
-        <div className="flex gap-2">
-          <Button onClick={openMyStore} variant="outline" className="border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/10"><Share2 className="w-4 h-4 mr-2" />Preview my store</Button>
-          <Button onClick={onSignup} variant="outline" className="border-fuchsia-500/40"><Building2 className="w-4 h-4 mr-2" />Register business</Button>
+        <div>
+          <Badge variant="outline" className="mb-3"><Store className="w-3 h-3 mr-1" />Supplier dashboard</Badge>
+          <h1 className="text-4xl font-semibold">{supplier.business_name}</h1>
+          <p className="text-muted-foreground mt-2">
+            {supplier.city ? supplier.city + ' · ' : ''}{supplier.email}
+          </p>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <Button onClick={() => window.open(`/?store=${encodeURIComponent(supplier.email)}`, '_blank')} variant="outline" className="border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/10"><Share2 className="w-4 h-4 mr-2" />My storefront</Button>
+          <Button onClick={onSignup} variant="outline" className="border-fuchsia-500/40"><Building2 className="w-4 h-4 mr-2" />Business details</Button>
+          <Button onClick={signOut} variant="ghost"><LogOut className="w-4 h-4 mr-2" />Sign out</Button>
         </div>
       </div>
 
-      <SupplierAnalytics email={user?.email} />
-      <AutoBidRulesPanel email={user?.email} />
+      {pendingApproval && (
+        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/[0.06] p-4 mb-6 flex items-start gap-3">
+          <Clock className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+          <div>
+            <div className="font-semibold">Account awaiting approval</div>
+            <div className="text-sm text-muted-foreground mt-0.5">
+              You can see live requests, but bidding unlocks once an admin approves your business. Add your GSTIN under &ldquo;Business details&rdquo; to speed this up.
+            </div>
+          </div>
+        </div>
+      )}
 
+      <SupplierAnalytics supplier={supplier} />
+      <AutoBidRulesPanel supplier={supplier} />
+
+      {orders.length > 0 && (
+        <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5 mb-6">
+          <div className="flex items-center gap-3 mb-4">
+            <Package className="w-5 h-5 text-cyan-400" />
+            <div>
+              <div className="font-semibold">Orders to fulfil</div>
+              <div className="text-xs text-muted-foreground">Move each order along as you dispatch it.</div>
+            </div>
+          </div>
+          <div className="grid gap-2">
+            {orders.map(o => (
+              <div key={o.id} className="rounded-xl border border-white/10 bg-white/[0.02] p-4 flex items-start justify-between gap-4 flex-wrap">
+                <div>
+                  <div className="text-xs text-muted-foreground">{o.tracking_id} · {STAGE_LABELS[o.stage] || o.stage}</div>
+                  <div className="font-medium mt-0.5">{o.product}</div>
+                  <div className="text-sm text-muted-foreground">{formatINR(o.amount_inr)} · {o.to_city}</div>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  {['packed', 'shipped', 'out_for_delivery', 'delivered']
+                    .filter(s => ['confirmed', 'packed', 'shipped', 'out_for_delivery'].indexOf(o.stage) < ['confirmed', 'packed', 'shipped', 'out_for_delivery'].indexOf(s === 'delivered' ? 'out_for_delivery' : s) + 1)
+                    .slice(0, 2)
+                    .map(s => (
+                      <Button key={s} size="sm" variant="outline" onClick={() => advance(o, s)} className="capitalize">
+                        Mark {s.replace(/_/g, ' ')}
+                      </Button>
+                    ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <h2 className="text-xl font-semibold mb-3">Live buyer requests</h2>
       {loading && <div className="text-muted-foreground">Loading...</div>}
       <div className="grid gap-3">
         {requests.map(r => (
           <div key={r.id} className="rounded-2xl border border-white/10 bg-white/[0.02] p-5 hover:bg-white/[0.04] transition">
             <div className="flex items-start justify-between gap-4 flex-wrap">
               <div className="flex-1 min-w-[240px]">
-                <div className="flex items-center gap-2 text-xs text-muted-foreground"><div className={`h-2 w-2 rounded-full ${r.status === 'open' ? 'bg-emerald-400 animate-pulse' : 'bg-gray-500'}`} />{r.status.toUpperCase()} · {new Date(r.created_at).toLocaleString('en-IN')}</div>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <div className={`h-2 w-2 rounded-full ${r.status === 'open' ? 'bg-emerald-400 animate-pulse' : 'bg-gray-500'}`} />
+                  {r.status.toUpperCase()} · {new Date(r.created_at).toLocaleString('en-IN')}
+                </div>
                 <div className="text-lg font-semibold mt-1">{r.requirement.summary || r.requirement.product}</div>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {r.requirement.brand && <Badge variant="outline">{r.requirement.brand}</Badge>}
@@ -1026,26 +1426,50 @@ function SupplierDashboard({ onSignup, user }) {
                   {r.requirement.location && <Badge variant="outline"><MapPin className="w-3 h-3 mr-1" />{r.requirement.location}</Badge>}
                   <Badge variant="outline">Qty {r.requirement.quantity}</Badge>
                 </div>
+                {r.my_offer && (
+                  <div className="mt-2 text-xs text-fuchsia-300 flex items-center gap-1.5">
+                    <Check className="w-3.5 h-3.5" />You bid {formatINR(r.my_offer.price_inr)} · {r.my_offer.status}
+                  </div>
+                )}
               </div>
-              <Button onClick={() => { setSelected(r); setForm(f => ({ ...f, price_inr: r.requirement.budget_inr ? String(Math.round(r.requirement.budget_inr * 0.95)) : '' })); }} disabled={r.status !== 'open'}>Submit offer<ChevronRight className="w-4 h-4 ml-1" /></Button>
+              <Button
+                disabled={r.status !== 'open' || pendingApproval}
+                onClick={() => {
+                  setSelected(r);
+                  setForm(f => ({
+                    ...f,
+                    price_inr: r.my_offer ? String(r.my_offer.price_inr) : r.requirement.budget_inr ? String(Math.round(r.requirement.budget_inr * 0.95)) : '',
+                  }));
+                }}
+              >
+                {r.my_offer ? 'Update bid' : 'Submit offer'}<ChevronRight className="w-4 h-4 ml-1" />
+              </Button>
             </div>
           </div>
         ))}
-        {!loading && !requests.length && <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-12 text-center text-muted-foreground">No requests yet.</div>}
+        {!loading && !requests.length && <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-12 text-center text-muted-foreground">No live requests right now. They appear here the moment a buyer posts one.</div>}
       </div>
+
       <Dialog open={!!selected} onOpenChange={o => !o && setSelected(null)}>
         <DialogContent className="max-w-lg bg-background/95 border-white/10">
-          <DialogHeader><DialogTitle>Submit your offer</DialogTitle><DialogDescription>{selected?.requirement?.summary}</DialogDescription></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>{selected?.my_offer ? 'Update your bid' : 'Submit your offer'}</DialogTitle>
+            <DialogDescription>{selected?.requirement?.summary}</DialogDescription>
+          </DialogHeader>
           <div className="grid grid-cols-2 gap-3">
-            <div className="col-span-2"><label className="text-xs text-muted-foreground">Store name</label><Input value={form.supplier_name} onChange={e => setForm({...form, supplier_name: e.target.value})} /></div>
-            <div><label className="text-xs text-muted-foreground">Price (₹)</label><Input type="number" value={form.price_inr} onChange={e => setForm({...form, price_inr: e.target.value})} /></div>
-            <div><label className="text-xs text-muted-foreground">Delivery days</label><Input type="number" value={form.delivery_days} onChange={e => setForm({...form, delivery_days: e.target.value})} /></div>
-            <div className="col-span-2"><label className="text-xs text-muted-foreground">Delivery note</label><Input value={form.delivery_note} onChange={e => setForm({...form, delivery_note: e.target.value})} /></div>
-            <div className="col-span-2"><label className="text-xs text-muted-foreground">Warranty</label><Input value={form.warranty} onChange={e => setForm({...form, warranty: e.target.value})} /></div>
-            <div className="col-span-2"><label className="text-xs text-muted-foreground">Extras</label><Input value={form.extras} onChange={e => setForm({...form, extras: e.target.value})} placeholder="Free case + HDFC 10% off" /></div>
-            <div className="col-span-2"><label className="text-xs text-muted-foreground">Message to buyer</label><Textarea value={form.message} onChange={e => setForm({...form, message: e.target.value})} rows={2} /></div>
+            <div><label className="text-xs text-muted-foreground">Price (₹)</label><Input type="number" value={form.price_inr} onChange={e => setForm({ ...form, price_inr: e.target.value })} /></div>
+            <div><label className="text-xs text-muted-foreground">Delivery days</label><Input type="number" min="0" value={form.delivery_days} onChange={e => setForm({ ...form, delivery_days: e.target.value })} /></div>
+            <div className="col-span-2"><label className="text-xs text-muted-foreground">Delivery note</label><Input value={form.delivery_note} onChange={e => setForm({ ...form, delivery_note: e.target.value })} /></div>
+            <div className="col-span-2"><label className="text-xs text-muted-foreground">Warranty</label><Input value={form.warranty} onChange={e => setForm({ ...form, warranty: e.target.value })} /></div>
+            <div className="col-span-2"><label className="text-xs text-muted-foreground">Extras</label><Input value={form.extras} onChange={e => setForm({ ...form, extras: e.target.value })} placeholder="Free case + HDFC 10% off" /></div>
+            <div className="col-span-2"><label className="text-xs text-muted-foreground">Message to buyer</label><Textarea value={form.message} onChange={e => setForm({ ...form, message: e.target.value })} rows={2} /></div>
           </div>
-          <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setSelected(null)}>Cancel</Button><Button onClick={submitOffer} disabled={submitting || !form.price_inr}>{submitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}Send offer</Button></div>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setSelected(null)}>Cancel</Button>
+            <Button onClick={submitOffer} disabled={submitting || !form.price_inr}>
+              {submitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}Send offer
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
@@ -1064,7 +1488,7 @@ function ReviewModal({ offer, user, onClose, onSubmitted }) {
   function toggleTag(t) { setTags(p => p.includes(t) ? p.filter(x => x !== t) : [...p, t]); }
   async function submit() {
     setSaving(true);
-    const r = await api('/reviews', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ offer_id: offer.id, rating, title, comment, tags, buyer_name: user?.name || 'Buyer', buyer_email: user?.email || null }) });
+    const r = await post('/reviews', { offer_id: offer.id, rating, title, comment, tags });
     if (r.ok) { toast.success('Thanks! Your review helps other buyers.'); onSubmitted(r.review); onClose(); }
     else toast.error(r.error || 'Failed');
     setSaving(false);
@@ -1174,24 +1598,22 @@ function WalletView({ user, wallet, tier, refresh }) {
 }
 
 // ============ AUTO-BID RULES PANEL (in supplier dashboard) ============
-function AutoBidRulesPanel({ email }) {
+function AutoBidRulesPanel({ supplier }) {
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [emailInput, setEmailInput] = useState(email || 'test@apple.in');
-  const [active, setActive] = useState(email || 'test@apple.in');
   const [f, setF] = useState({ name: 'Apple smartphones auto-bid', brand: 'Apple', sub_category: 'smartphone', discount_pct: '5', delivery_days: '1', warranty: '1 year manufacturer', extras: 'Free case', validity_hours: '24', message: 'Ready to dispatch today!' });
-  async function load() { setLoading(true); const r = await api(`/supplier/rules/${encodeURIComponent(active)}`); setRules(r.rules || []); setLoading(false); }
-  useEffect(() => { load(); }, [active]);
+  async function load() { setLoading(true); const r = await api('/supplier/rules'); setRules(r.rules || []); setLoading(false); }
+  useEffect(() => { load(); }, [supplier?.id]);
   async function create() {
     setCreating(true);
-    const r = await api('/supplier/rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ supplier_email: active, ...f }) });
-    if (r.ok) { toast.success('Auto-bid rule live! You will auto-offer on matching requests.'); load(); }
-    else toast.error(r.error || 'Failed. Make sure supplier is registered.');
+    const r = await post('/supplier/rules', f);
+    if (r.ok) { toast.success('Auto-bid rule live. You will auto-offer on matching requests.'); load(); }
+    else toast.error(r.error || 'Could not create that rule');
     setCreating(false);
   }
-  async function toggle(id) { await api(`/supplier/rules/id/${id}/toggle`, { method: 'POST' }); load(); }
-  async function del(id) { await api(`/supplier/rules/id/${id}`, { method: 'DELETE' }); load(); toast.success('Rule deleted'); }
+  async function toggle(id) { await post(`/supplier/rules/${id}/toggle`); load(); }
+  async function remove(id) { await api(`/supplier/rules/${id}`, { method: 'DELETE' }); load(); toast.success('Rule deleted'); }
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5 mb-6">
       <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
@@ -1201,10 +1623,6 @@ function AutoBidRulesPanel({ email }) {
             <div className="font-semibold">Auto-bid rules</div>
             <div className="text-xs text-muted-foreground">Set price rules — we&apos;ll auto-submit offers when matching requests drop</div>
           </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Input value={emailInput} onChange={e => setEmailInput(e.target.value)} placeholder="your supplier email" className="w-56 h-9" />
-          <Button size="sm" variant="outline" onClick={() => setActive(emailInput)}>Load</Button>
         </div>
       </div>
       {loading ? <div className="text-sm text-muted-foreground">Loading...</div> : (
@@ -1222,7 +1640,7 @@ function AutoBidRulesPanel({ email }) {
               </div>
               <div className="flex gap-1">
                 <Button size="sm" variant="ghost" onClick={() => toggle(r.id)}><Power className="w-4 h-4" /></Button>
-                <Button size="sm" variant="ghost" onClick={() => del(r.id)}><Trash2 className="w-4 h-4 text-red-400" /></Button>
+                <Button size="sm" variant="ghost" onClick={() => remove(r.id)}><Trash2 className="w-4 h-4 text-red-400" /></Button>
               </div>
             </div>
           ))}
@@ -1382,10 +1800,10 @@ function GroupBuyBanner({ request, user }) {
     if (g) {
       const already = g.members.some(m => m.email === user.email);
       if (already) { toast.info('You are already in this group'); setJoining(false); return; }
-      const r = await api(`/groups/${g.id}/join`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ buyer_email: user.email, buyer_name: user.name }) });
+      const r = await post(`/groups/${g.id}/join`);
       if (r.ok) { toast.success('Joined group buy! Deeper discounts unlocking...'); setSuggestion({ ...suggestion, existing_group: r.group }); }
     } else {
-      const r = await api(`/groups`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ request_id: request.id, buyer_email: user.email, buyer_name: user.name }) });
+      const r = await post('/groups', { request_id: request.id });
       if (r.ok) { toast.success('Group buy started! Invite friends to unlock bigger discounts.'); setSuggestion({ ...suggestion, existing_group: r.group }); }
     }
     setJoining(false);
@@ -1682,120 +2100,6 @@ function StationeryView({ user }) {
   );
 }
 
-// ============ ADMIN DASHBOARD ============
-function AdminDashboard() {
-  const [tab, setTab] = useState('overview');
-  const [data, setData] = useState({ requests: [], suppliers: [], users: [], payments: [], offers: [], metrics: {} });
-  const [loading, setLoading] = useState(true);
-  async function load() {
-    setLoading(true);
-    const r = await api('/admin/overview');
-    if (r.ok) setData({ requests: r.requests || [], suppliers: r.suppliers || [], users: [], payments: r.payments || [], offers: r.offers || [], metrics: r.metrics || {} });
-    setLoading(false);
-  }
-  useEffect(() => { load(); }, []);
-  const totalGMV = data.requests.reduce((sum, r) => sum + (r.requirement?.budget_inr || 0), 0);
-  const approvedSuppliers = data.suppliers.filter(s => s.status === 'approved').length;
-  const closedReq = data.requests.filter(r => r.status === 'closed').length;
-  return (
-    <div className="container mx-auto px-6 py-10">
-      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <div>
-          <Badge variant="outline" className="mb-2"><Crown className="w-3 h-3 mr-1" />Admin</Badge>
-          <h1 className="text-3xl md:text-4xl font-bold">Platform overview</h1>
-          <p className="text-muted-foreground mt-1">Manage buyers, suppliers, requests, offers and payments across BoliBazzar.</p>
-        </div>
-        <Button variant="outline" onClick={load}><Loader2 className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />Refresh</Button>
-      </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-        <StatCard icon={<Users className="w-4 h-4 text-cyan-400" />} label="Buyer requests" value={data.requests.length} />
-        <StatCard icon={<Store className="w-4 h-4 text-fuchsia-400" />} label="Approved suppliers" value={approvedSuppliers} sub={`${data.suppliers.length} total`} />
-        <StatCard icon={<Trophy className="w-4 h-4 text-amber-400" />} label="Closed deals" value={closedReq} />
-        <StatCard icon={<TrendingUp className="w-4 h-4 text-emerald-400" />} label="Buyer intent GMV" value={formatINR(totalGMV)} />
-        <StatCard icon={<MessageSquare className="w-4 h-4 text-cyan-400" />} label="Supplier offers" value={data.metrics.offer_count || data.offers.length} sub={`${data.metrics.pending_offers || 0} pending`} />
-        <StatCard icon={<CreditCard className="w-4 h-4 text-emerald-400" />} label="Paid orders" value={data.metrics.paid_orders || 0} sub={formatINR(data.metrics.payment_volume_inr || 0)} />
-      </div>
-      <div className="flex gap-2 flex-wrap mb-4 border-b border-white/10">
-        {[['overview','Overview'],['suppliers','Suppliers'],['requests','Requests']].map(([k,l])=>(
-          <button key={k} onClick={()=>setTab(k)} className={`px-4 py-2 text-sm border-b-2 -mb-px transition ${tab===k ? 'border-fuchsia-500 text-foreground font-medium' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>{l}</button>
-        ))}
-      </div>
-      {tab === 'overview' && (
-        <div className="grid md:grid-cols-2 gap-4">
-          <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
-            <div className="font-semibold mb-3 flex items-center gap-2"><ClipboardList className="w-4 h-4 text-cyan-400" />Latest requests</div>
-            {data.requests.slice(0, 6).map(r => (
-              <div key={r.id} className="py-2 border-b border-white/5 last:border-0">
-                <div className="text-sm font-medium truncate">{r.requirement?.summary || r.requirement?.product}</div>
-                <div className="text-xs text-muted-foreground">{r.status.toUpperCase()} · {r.offer_count || 0} offers · {r.buyer_email || 'guest'} · {new Date(r.created_at).toLocaleDateString('en-IN')}</div>
-              </div>
-            ))}
-          </div>
-          <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
-            <div className="font-semibold mb-3 flex items-center gap-2"><Store className="w-4 h-4 text-fuchsia-400" />Latest suppliers</div>
-            {data.suppliers.slice(0, 6).map(s => (
-              <div key={s.id} className="py-2 border-b border-white/5 last:border-0 flex items-center justify-between">
-                <div>
-                  <div className="text-sm font-medium">{s.business_name}</div>
-                  <div className="text-xs text-muted-foreground">{s.email} · {s.city || 'India'}</div>
-                </div>
-                <Badge className={s.status === 'approved' ? 'bg-emerald-500/20 text-emerald-300 border-0' : 'bg-amber-500/20 text-amber-300 border-0'}>{s.status}</Badge>
-              </div>
-            ))}
-          </div>
-          <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
-            <div className="font-semibold mb-3 flex items-center gap-2"><MessageSquare className="w-4 h-4 text-cyan-400" />Latest supplier activity</div>
-            {data.offers.slice(0, 6).map(o => (
-              <div key={o.id} className="py-2 border-b border-white/5 last:border-0 flex items-center justify-between gap-3">
-                <div className="min-w-0"><div className="text-sm font-medium truncate">{o.supplier_name}</div><div className="text-xs text-muted-foreground truncate">{formatINR(o.price_inr)} · {o.source || 'manual'}</div></div>
-                <Badge className={o.status === 'accepted' ? 'bg-emerald-500/20 text-emerald-300 border-0' : 'bg-cyan-500/20 text-cyan-300 border-0'}>{o.status}</Badge>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-      {tab === 'suppliers' && (
-        <div className="rounded-2xl border border-white/10 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-white/[0.03]"><tr className="text-left text-xs uppercase text-muted-foreground"><th className="p-3">Business</th><th className="p-3">GST</th><th className="p-3">City</th><th className="p-3">Brands</th><th className="p-3">Status</th><th className="p-3">Rating</th></tr></thead>
-            <tbody>
-              {data.suppliers.map(s => (
-                <tr key={s.id} className="border-t border-white/5">
-                  <td className="p-3"><div className="font-medium">{s.business_name}</div><div className="text-xs text-muted-foreground">{s.email}</div></td>
-                  <td className="p-3 font-mono text-xs">{s.gst} {s.gst_valid ? <Check className="w-3 h-3 inline text-emerald-400" /> : null}</td>
-                  <td className="p-3">{s.city || '—'}</td>
-                  <td className="p-3 text-xs">{(s.brand_authorisations || []).slice(0, 3).join(', ') || '—'}</td>
-                  <td className="p-3"><Badge className={s.status === 'approved' ? 'bg-emerald-500/20 text-emerald-300 border-0' : 'bg-amber-500/20 text-amber-300 border-0'}>{s.status}</Badge></td>
-                  <td className="p-3"><Star className="w-3 h-3 inline fill-yellow-400 text-yellow-400 mr-0.5" />{s.rating}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {tab === 'requests' && (
-        <div className="rounded-2xl border border-white/10 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-white/[0.03]"><tr className="text-left text-xs uppercase text-muted-foreground"><th className="p-3">Buyer</th><th className="p-3">Product</th><th className="p-3">Budget</th><th className="p-3">Location</th><th className="p-3">Status</th><th className="p-3">Created</th></tr></thead>
-            <tbody>
-              {data.requests.map(r => (
-                <tr key={r.id} className="border-t border-white/5">
-                  <td className="p-3">{r.buyer_name}<div className="text-xs text-muted-foreground">{r.buyer_email || '—'}</div></td>
-                  <td className="p-3">{r.requirement?.product}<div className="text-xs text-muted-foreground">{r.requirement?.brand} {r.requirement?.storage}</div></td>
-                  <td className="p-3 font-medium">{formatINR(r.requirement?.budget_inr)}</td>
-                  <td className="p-3">{r.requirement?.location || '—'}</td>
-                  <td className="p-3"><Badge className={r.status === 'closed' ? 'bg-emerald-500/20 text-emerald-300 border-0' : 'bg-cyan-500/20 text-cyan-300 border-0'}>{r.status}</Badge></td>
-                  <td className="p-3 text-xs text-muted-foreground">{new Date(r.created_at).toLocaleDateString('en-IN')}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ============ APP LANDING (desktop-first, download focused) ============
 function AppLanding({ onOpenPWA }) {
   return (
@@ -1937,66 +2241,120 @@ function App() {
   const [trackOffer, setTrackOffer] = useState(null);
   const [wallet, setWallet] = useState(null);
   const [tier, setTier] = useState(null);
+  const [auction, setAuction] = useState(null);
+  const [booting, setBooting] = useState(true);
 
+  // --- session ------------------------------------------------------------
+  async function loadSession() {
+    const s = await api('/auth/session');
+    if (s.ok) {
+      setUser(s.buyer || null);
+      setTier(s.buyer?.tier || null);
+    }
+    setBooting(false);
+  }
   async function loadWallet() {
-    if (!user?.email) { setWallet(null); setTier(null); return; }
-    const [w, m] = await Promise.all([
-      api(`/wallet/${encodeURIComponent(user.email)}`),
-      api(`/me/${encodeURIComponent(user.email)}`),
-    ]);
+    if (!user?.email) { setWallet(null); return; }
+    const [w, m] = await Promise.all([api('/wallet'), api('/me')]);
     if (w.ok) setWallet(w.wallet);
     if (m.ok) setTier(m.user.tier);
   }
+  useEffect(() => { loadSession(); }, []);
   useEffect(() => { loadWallet(); }, [user?.email]);
+
+  async function logout() {
+    await api('/auth/session', { method: 'DELETE', body: JSON.stringify({ role: 'buyer' }) });
+    setUser(null); setWallet(null); setTier(null);
+    toast.success('Signed out');
+  }
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const nextMode = params.get('app') !== null ? 'app' : params.get('store') ? 'store' : 'landing';
-    const nextStoreSlug = params.get('store');
     setMode(nextMode);
-    setStoreSlug(nextStoreSlug);
+    setStoreSlug(params.get('store'));
+    if (params.get('store')) setView('store');
+    else if (params.get('view')) setView(params.get('view'));
     if (nextMode === 'landing' || nextMode === 'app') {
       try { setShowSplash(!localStorage.getItem('bb_splash_seen')); } catch { setShowSplash(true); }
     }
-    const s = localStorage.getItem('bb_user');
-    if (s) try { setUser(JSON.parse(s)); } catch {}
   }, []);
-  useEffect(() => { user ? localStorage.setItem('bb_user', JSON.stringify(user)) : localStorage.removeItem('bb_user'); }, [user]);
+
+  // --- live auction polling ------------------------------------------------
+  // One loop owns the board. It advances the auction server-side and pulls the
+  // freshly ranked offers, so prices genuinely move while you watch.
+  useEffect(() => {
+    if (view !== 'offers' || !request?.id) return;
+    let cancelled = false;
+    let timer;
+
+    async function poll() {
+      const r = await api(`/requests/${request.id}/live`);
+      if (cancelled) return;
+      if (r.ok) {
+        setOffers(r.offers || []);
+        setAuction(r.auction);
+        setRequest(prev => ({ ...prev, ...r.request }));
+        setRefreshing(false);
+        for (const drop of r.changes?.dropped || []) {
+          toast.success(`Price dropped to ${formatINR(drop.new_price)}`, { id: 'drop-' + drop.id });
+        }
+      }
+      // Poll fast while the auction is live, slowly once it has closed.
+      const live = r.auction?.live && r.request?.status === 'open';
+      timer = setTimeout(poll, live ? 2500 : 15000);
+    }
+    poll();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [view, request?.id]);
 
   async function handleExtract(t) {
     setText(t); setLoading(true);
-    const r = await api('/extract', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: t }) });
-    if (r.ok) setRequirement(r.requirement); else toast.error(r.error || 'AI failed');
+    const r = await post('/extract', { text: t });
+    if (r.ok) {
+      setRequirement(r.requirement);
+      if (r.degraded) toast.warning('AI service unreachable — used the offline parser. Check the details.');
+    } else {
+      toast.error(r.error || 'Could not understand that requirement');
+    }
     setLoading(false);
   }
+
   async function confirmRequirement() {
     setConfirming(true);
-    const r = await api('/requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requirement, raw_text: text, buyer_name: user?.name || 'Guest', buyer_email: user?.email || null }) });
+    const r = await post('/requests', { requirement, raw_text: text });
     if (r.ok) {
-      setRequest(r.request); setRequirement(null); setView('offers'); setOffers([]); setRefreshing(true);
-      const sim = await api(`/requests/${r.request.id}/simulate`, { method: 'POST' });
-      if (sim.ok && sim.offers) {
-        const sorted = [...sim.offers].sort((a,b) => a.price_inr - b.price_inr);
-        for (let i = 0; i < sorted.length; i++) {
-          await new Promise(res => setTimeout(res, 600 + Math.random()*700));
-          setOffers(prev => [...prev, sorted[i]].sort((a,b) => a.price_inr - b.price_inr));
-        }
-      }
-      setRefreshing(false);
-    } else toast.error(r.error);
+      if (!r.request.buyer_email) rememberGuestRequest(r.request.id);
+      setRequest(r.request);
+      setRequirement(null);
+      setOffers([]);
+      setAuction(null);
+      setRefreshing(true);
+      setView('offers');
+    } else {
+      toast.error(r.error || 'Could not post that request');
+    }
     setConfirming(false);
   }
-  function acceptOffer(offer) { setPayOffer(offer); }
-  async function onPaid() {
-    await api(`/offers/${payOffer.id}/accept`, { method: 'POST' });
-    const rr = await api(`/requests/${request.id}`);
-    setOffers(rr.offers || []); setRequest(rr.request);
-    // Prompt buyer to review after 1s
-    setTimeout(() => setReviewOffer(payOffer), 1200);
+
+  function acceptOffer(offer) {
+    if (!user) { setLoginOpen(true); toast.info('Sign in to complete your purchase'); return; }
+    setPayOffer(offer);
   }
+
+  async function onPaid(offer) {
+    const accepted = await post(`/offers/${offer.id}/accept`);
+    if (!accepted.ok) { toast.error(accepted.error || 'Could not confirm the order'); return; }
+    const fresh = await api(`/requests/${request.id}/live`);
+    if (fresh.ok) { setOffers(fresh.offers || []); setRequest(p => ({ ...p, ...fresh.request })); setAuction(fresh.auction); }
+    loadWallet();
+    setTimeout(() => setReviewOffer(offer), 1400);
+  }
+
   async function openPastRequest(r) {
     const rr = await api(`/requests/${r.id}`);
-    setRequest(rr.request); setOffers(rr.offers || []); setView('offers');
+    if (!rr.ok) return toast.error(rr.error || 'Could not open that request');
+    setRequest(rr.request); setOffers(rr.offers || []); setAuction(null); setView('offers');
   }
 
   function openPWA() { setMode('app'); setView('home'); }
@@ -2029,21 +2387,29 @@ function App() {
     <div>
       {showSplash && <Splash onDone={() => setShowSplash(false)} />}
       <Script src="https://checkout.razorpay.com/v1/checkout.js" strategy="afterInteractive" />
-      <Navbar view={view} setView={(v) => { setView(v); if (v === 'home') { setRequest(null); setOffers([]); } }} user={user} onLogin={() => setLoginOpen(true)} onLogout={() => setUser(null)} onSupplierSignup={() => setSupplierSignupOpen(true)} wallet={wallet} tier={tier} />
+      <Navbar
+        view={view}
+        setView={(v) => { setView(v); if (v === 'home') { setRequest(null); setOffers([]); setAuction(null); } }}
+        user={user} booting={booting}
+        onLogin={() => setLoginOpen(true)} onLogout={logout}
+        onSupplierSignup={() => setSupplierSignupOpen(true)}
+        wallet={wallet} tier={tier}
+      />
 
       {view === 'home' && !request && (<><Hero onSubmit={handleExtract} loading={loading} /><FeaturedElectronics /><HowItWorks /><FAQ /><Footer /></>)}
-      {view === 'offers' && request && (<><OffersView request={request} offers={offers} onAccept={acceptOffer} onChat={setChatOffer} onTrack={setTrackOffer} refreshing={refreshing} onTick={(newOffers) => setOffers(newOffers)} user={user} /><Footer /></>)}
-      {view === 'supplier' && (<><SupplierDashboard onSignup={() => setSupplierSignupOpen(true)} user={user} /><Footer /></>)}
+      {view === 'offers' && request && (<><OffersView request={request} offers={offers} auction={auction} onAccept={acceptOffer} onChat={setChatOffer} onTrack={setTrackOffer} refreshing={refreshing} user={user} /><Footer /></>)}
+      {view === 'supplier' && (<><SupplierDashboard onSignup={() => setSupplierSignupOpen(true)} /><Footer /></>)}
       {view === 'my_requests' && user && (<><MyRequests user={user} onOpen={openPastRequest} /><Footer /></>)}
+      {view === 'orders' && user && (<><OrdersView onTrack={setTrackOffer} onReview={setReviewOffer} /><Footer /></>)}
       {view === 'wallet' && user && (<><WalletView user={user} wallet={wallet} tier={tier} refresh={loadWallet} /><Footer /></>)}
       {view === 'stationery' && (<><StationeryView user={user} /><Footer /></>)}
       {view === 'store' && storeSlug && (<><BrandStore slug={storeSlug} onClose={() => { setStoreSlug(null); setView('home'); if (typeof window !== 'undefined') window.history.replaceState({}, '', '/'); }} /><Footer /></>)}
 
       {requirement && <RequirementPreview requirement={requirement} onConfirm={confirmRequirement} onCancel={() => setRequirement(null)} confirming={confirming} />}
-      <LoginModal open={loginOpen} onOpenChange={setLoginOpen} onLogin={setUser} />
-      <SupplierSignupModal open={supplierSignupOpen} onOpenChange={setSupplierSignupOpen} onDone={() => {}} />
+      <LoginModal open={loginOpen} onOpenChange={setLoginOpen} onLogin={(u) => { setUser(u); setTier(u?.tier || null); }} />
+      <SupplierSignupModal open={supplierSignupOpen} onOpenChange={setSupplierSignupOpen} onDone={() => setView('supplier')} />
       {chatOffer && <ChatSheet offer={chatOffer} user={user} onClose={() => setChatOffer(null)} />}
-      {payOffer && <PaymentModal offer={payOffer} user={user} wallet={wallet} tier={tier} onReloadWallet={loadWallet} onClose={() => setPayOffer(null)} onPaid={() => { onPaid(); setPayOffer(null); }} />}
+      {payOffer && <PaymentModal offer={payOffer} user={user} wallet={wallet} tier={tier} onReloadWallet={loadWallet} onClose={() => setPayOffer(null)} onPaid={() => { onPaid(payOffer); setPayOffer(null); }} />}
       {reviewOffer && <ReviewModal offer={reviewOffer} user={user} onClose={() => setReviewOffer(null)} onSubmitted={() => setReviewOffer(null)} />}
       {trackOffer && <DeliveryTracker offer={trackOffer} onClose={() => setTrackOffer(null)} />}
     </div>

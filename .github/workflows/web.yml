@@ -7,6 +7,8 @@ on:
       - 'app/**'
       - 'lib/**'
       - 'components/**'
+      - 'scripts/**'
+      - 'next.config.js'
       - 'package.json'
       - 'yarn.lock'
       - '.github/workflows/web.yml'
@@ -18,8 +20,8 @@ jobs:
     name: Build Next.js
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: 'yarn'
@@ -35,16 +37,71 @@ jobs:
           RAZORPAY_KEY_SECRET: dummy
           NEXT_PUBLIC_RAZORPAY_KEY_ID: dummy
           NEXT_PUBLIC_BASE_URL: https://example.com
+          CORS_ORIGINS: https://example.com
           ADMIN_EMAILS: admin@bolibazzar.in
+          ADMIN_ACCESS_KEY: ci-dummy-access-key
+          # Sessions are signed at runtime; the build only needs it present.
+          SESSION_SECRET: ci-dummy-session-secret
         run: yarn build
+
+  # Full end-to-end check against a real MongoDB: OTP auth, the live auction,
+  # payments, orders, chat and every authorization rule.
+  smoke:
+    name: End-to-end smoke test
+    runs-on: ubuntu-latest
+    needs: build
+    services:
+      mongodb:
+        image: mongo:7
+        ports: ['27017:27017']
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand(\"ping\").ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MONGO_URL: mongodb://localhost:27017
+      DB_NAME: bolibazzar_ci
+      EMERGENT_LLM_KEY: dummy
+      EMERGENT_LLM_BASE_URL: https://integrations.emergentagent.com/llm
+      NEXT_PUBLIC_BASE_URL: http://localhost:3000
+      CORS_ORIGINS: http://localhost:3000
+      ADMIN_EMAILS: admin@bolibazzar.in
+      ADMIN_ACCESS_KEY: ci-dummy-access-key
+      SESSION_SECRET: ci-dummy-session-secret
+      OTP_DEV_MODE: 'true'
+      PAYMENTS_TEST_MODE: 'true'
+      DEMO_BIDDERS: 'true'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: 'yarn'
+      - run: yarn install --frozen-lockfile
+      - name: Seed the database
+        run: node scripts/seed.mjs
+      - name: Start the app
+        run: |
+          yarn dev > /tmp/dev.log 2>&1 &
+          for i in $(seq 1 90); do
+            curl -sf -m 3 http://localhost:3000/api/health >/dev/null && exit 0
+            sleep 1
+          done
+          echo "server did not start in time"; cat /tmp/dev.log; exit 1
+      - name: Smoke test
+        run: node scripts/smoke.mjs
+      - name: Server log on failure
+        if: failure()
+        run: tail -100 /tmp/dev.log
 
   deploy-vercel:
     name: Deploy to Vercel
-    needs: build
+    needs: [build, smoke]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Deploy
         uses: amondnet/vercel-action@v25
         with:

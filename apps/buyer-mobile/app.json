@@ -7,12 +7,6 @@
     "icon": "./assets/icon.png",
     "scheme": "bolibazzar",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#0a0a12"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "in.bolibazzar.app",
@@ -37,8 +31,15 @@
     },
     "plugins": [
       "expo-router",
-      "expo-splash-screen",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#0a0a12"
+        }
+      ]
     ],
     "extra": {
       "apiBaseUrl": "https://api.bolibazzar.in/api"

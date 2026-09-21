@@ -4,8 +4,10 @@ import { Platform } from 'react-native';
 import { post } from './api';
 
 Notifications.setNotificationHandler({
+  // SDK 53+ replaced shouldShowAlert with separate banner and list controls.
   handleNotification: async () => ({
-    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: true,
   }),

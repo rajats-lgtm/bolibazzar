@@ -71,3 +71,6 @@ node_modules/@next/swc-linux-arm64-gnu/next-swc.linux-arm64-gnu.node
 
 # Local dev database + screenshots
 .devdata/
+
+# UAT secrets
+.env.uat

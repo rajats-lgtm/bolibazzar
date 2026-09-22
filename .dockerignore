@@ -1,0 +1,26 @@
+# Keep the build context small: these are rebuilt inside the image.
+**/node_modules
+**/.next
+**/dist
+**/build
+**/.expo
+**/android
+**/ios
+
+# Local state and secrets
+.devdata
+.env
+.env.*
+!.env.example
+.git
+.github
+
+# Mobile apps are not part of the web images
+apps/buyer-mobile
+apps/supplier-mobile
+
+**/.DS_Store
+**/*.log
+test_reports
+memory
+.emergent

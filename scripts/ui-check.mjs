@@ -49,6 +49,10 @@ page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
 page.on('response', (r) => {
   if (r.status() >= 400) errors.push(`http ${r.status()}: ${r.url()}`);
 });
+// A blocked or unreachable host never produces a response, only a failure.
+page.on('requestfailed', (r) => {
+  errors.push(`${r.failure()?.errorText || 'failed'}: ${r.url()}`);
+});
 page.on('console', (m) => {
   if (m.type() === 'error') {
     const text = m.text();

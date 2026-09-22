@@ -2243,6 +2243,10 @@ function App() {
   const [tier, setTier] = useState(null);
   const [auction, setAuction] = useState(null);
   const [booting, setBooting] = useState(true);
+  // Whether real gateway checkout is in play. In test environments payments
+  // settle server-side, so the external Razorpay script is never needed —
+  // and loading it would fail anyway on networks that block the CDN.
+  const [liveCheckout, setLiveCheckout] = useState(false);
 
   // --- session ------------------------------------------------------------
   async function loadSession() {
@@ -2260,6 +2264,11 @@ function App() {
     if (m.ok) setTier(m.user.tier);
   }
   useEffect(() => { loadSession(); }, []);
+  useEffect(() => {
+    api('/health').then((h) => {
+      if (h.ok) setLiveCheckout(!!h.razorpay_live && !h.payments_test_mode);
+    });
+  }, []);
   useEffect(() => { loadWallet(); }, [user?.email]);
 
   async function logout() {
@@ -2386,7 +2395,7 @@ function App() {
   return (
     <div>
       {showSplash && <Splash onDone={() => setShowSplash(false)} />}
-      <Script src="https://checkout.razorpay.com/v1/checkout.js" strategy="afterInteractive" />
+      {liveCheckout && <Script src="https://checkout.razorpay.com/v1/checkout.js" strategy="afterInteractive" />}
       <Navbar
         view={view}
         setView={(v) => { setView(v); if (v === 'home') { setRequest(null); setOffers([]); setAuction(null); } }}

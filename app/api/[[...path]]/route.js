@@ -5,11 +5,11 @@ import { NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
 import { getDb } from '@/lib/mongo';
-import { llm, MODEL_EXTRACT } from '@/lib/llm';
+import { getLlm, hasLlm, MODEL_EXTRACT } from '@/lib/llm';
 import {
   ROLES, sessionSubject, attachSession, clearSession, safeEqual, createSessionToken,
   generateOtp, hashOtp, otpDevMode, OTP_TTL_MS, OTP_MAX_ATTEMPTS,
-  normaliseEmail, isEmail, normalisePhone,
+  normaliseEmail, isEmail, normalisePhone, isProductionEnv, appEnv,
 } from '@/lib/auth';
 import { computeValueScore, computeTier } from '@/lib/scoring';
 import { advanceAuction, runAutoBidMatching, AUCTION_WINDOW_MS, demoBiddersEnabled } from '@/lib/bidding';
@@ -101,7 +101,7 @@ Rules:
 - summary should be natural in the user's language e.g. Hindi: "1 lakh 20 hazaar ke andar iPhone 17 Pro Max Mumbai mein"`;
 
 async function extractRequirement(text) {
-  const response = await llm.chat.completions.create({
+  const response = await getLlm().chat.completions.create({
     model: MODEL_EXTRACT,
     messages: [{ role: 'system', content: EXTRACT_SYSTEM }, { role: 'user', content: text }],
     response_format: { type: 'json_object' },
@@ -175,11 +175,12 @@ function hasRazorpay() { return !!(process.env.RAZORPAY_KEY_ID && process.env.RA
 
 /**
  * Lets a payment settle without a real gateway signature, so the flow can be
- * driven from tests and from the mobile apps before checkout is wired up.
- * Hard-disabled in production — this must never be reachable on a live site.
+ * driven from tests, from a UAT, and from the mobile apps before checkout is
+ * wired up. Hard-disabled in a production environment: this must never be
+ * reachable on a live site, regardless of how the build was compiled.
  */
 function paymentsTestMode() {
-  return process.env.NODE_ENV !== 'production' && process.env.PAYMENTS_TEST_MODE === 'true';
+  return !isProductionEnv() && process.env.PAYMENTS_TEST_MODE === 'true';
 }
 
 async function createRazorpayOrder(amountPaise, receipt) {
@@ -243,6 +244,7 @@ async function route(req, { params }) {
     return ok({
       status: 'ok',
       service: 'BoliBazzar API',
+      environment: appEnv(),
       razorpay_live: hasRazorpay(),
       payments_test_mode: paymentsTestMode(),
       whatsapp_live: hasWhatsApp(),
@@ -537,6 +539,9 @@ async function route(req, { params }) {
   if (path === '/extract' && method === 'POST') {
     const { text } = await readJson(req);
     if (!text?.trim()) return err('text is required');
+    if (!hasLlm()) {
+      return ok({ requirement: extractRequirementLocally(text), degraded: true });
+    }
     try {
       const requirement = await extractRequirement(text);
       return ok({ requirement });
@@ -856,7 +861,11 @@ async function route(req, { params }) {
     const amountPaise = Math.round(finalAmount * 100);
 
     try {
-      const order = await createRazorpayOrder(amountPaise, receipt);
+      // In a test environment never touch the live gateway, even when keys are
+      // configured: a UAT must not create real Razorpay orders.
+      const order = paymentsTestMode()
+        ? { orderId: 'test_order_' + uuidv4().slice(0, 12), amount: amountPaise, currency: 'INR', mocked: true }
+        : await createRazorpayOrder(amountPaise, receipt);
       const payment = {
         id: uuidv4(),
         offer_id, request_id: offer.request_id, receipt,

@@ -1,0 +1,129 @@
+# BoliBazzar UAT stack.
+#
+#   cp .env.uat.example .env.uat   # then fill in the secrets
+#   docker compose --env-file .env.uat -f docker-compose.uat.yml up -d --build
+#
+# Brings up MongoDB, the customer app + API, the admin console and the
+# marketing site, seeds test data, and waits until everything is healthy.
+
+name: bolibazzar-uat
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    # Not published to the host by default: only the app containers need it.
+    expose:
+      - "27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  api:
+    image: bolibazzar/api:uat
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Docker's bridge network cannot reach the package registries on this
+      # host (corporate proxy/VPN), but host networking can.
+      network: host
+      args:
+        NEXT_PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+        NEXT_PUBLIC_RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      # A production *build*, but not a production *environment*: this is what
+      # keeps OTP_DEV_MODE and PAYMENTS_TEST_MODE usable for testers.
+      APP_ENV: uat
+      MONGO_URL: mongodb://mongo:27017
+      DB_NAME: ${DB_NAME:-bolibazzar_uat}
+      NEXT_PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      SESSION_SECRET: ${SESSION_SECRET}
+      ADMIN_EMAILS: ${ADMIN_EMAILS}
+      ADMIN_ACCESS_KEY: ${ADMIN_ACCESS_KEY}
+      EMERGENT_LLM_KEY: ${EMERGENT_LLM_KEY:-}
+      EMERGENT_LLM_BASE_URL: ${EMERGENT_LLM_BASE_URL:-}
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      WHATSAPP_FROM: ${WHATSAPP_FROM:-}
+      # UAT-specific behaviour. Testers need to log in without an SMS gateway
+      # and pay without a live card, so these stay on here and only here.
+      OTP_DEV_MODE: ${OTP_DEV_MODE:-true}
+      PAYMENTS_TEST_MODE: ${PAYMENTS_TEST_MODE:-true}
+      DEMO_BIDDERS: ${DEMO_BIDDERS:-true}
+      AUCTION_WINDOW_SECONDS: ${AUCTION_WINDOW_SECONDS:-120}
+    ports:
+      - "${API_PORT:-3000}:3000"
+
+  # Runs once to create indexes and load test accounts, then exits.
+  seed:
+    image: bolibazzar/api:uat
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Docker's bridge network cannot reach the package registries on this
+      # host (corporate proxy/VPN), but host networking can.
+      network: host
+    restart: "no"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+      DB_NAME: ${DB_NAME:-bolibazzar_uat}
+      ADMIN_EMAILS: ${ADMIN_EMAILS}
+    command: ["node", "scripts/seed.mjs"]
+
+  admin:
+    image: bolibazzar/admin:uat
+    build:
+      context: .
+      dockerfile: apps/admin-web/Dockerfile
+      # Docker's bridge network cannot reach the package registries on this
+      # host (corporate proxy/VPN), but host networking can.
+      network: host
+      args:
+        ADMIN_API_ORIGIN: http://api:3000
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      # The admin console owns no database connection; it proxies to the API.
+      ADMIN_API_ORIGIN: http://api:3000
+    ports:
+      - "${ADMIN_PORT:-3001}:3001"
+
+  landing:
+    image: bolibazzar/landing:uat
+    build:
+      context: .
+      dockerfile: apps/desktop-landing/Dockerfile
+      # Docker's bridge network cannot reach the package registries on this
+      # host (corporate proxy/VPN), but host networking can.
+      network: host
+      args:
+        NEXT_PUBLIC_APP_URL: ${PUBLIC_BASE_URL}
+        NEXT_PUBLIC_APP_STORE_URL: ${APP_STORE_URL:-}
+        NEXT_PUBLIC_PLAY_STORE_URL: ${PLAY_STORE_URL:-}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+    ports:
+      - "${LANDING_PORT:-3002}:3002"
+
+volumes:
+  mongo-data:

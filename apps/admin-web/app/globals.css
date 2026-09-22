@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * The admin console is intentionally plain and self-contained: it must deploy
+ * on its own private subdomain without depending on the customer app's
+ * design system.
+ */
+body {
+  margin: 0;
+  background: #080b12;
+  color: #e2e8f0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
+    Ubuntu, Cantarell, 'Fira Sans', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}

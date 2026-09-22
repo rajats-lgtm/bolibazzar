@@ -151,8 +151,12 @@ const strangerBid = await stranger.call(`/requests/${requestId}/offers`, { metho
 check('bidding requires supplier auth', strangerBid.status === 401, `got ${strangerBid.status}`);
 
 live = await buyer.call(`/requests/${requestId}/live`);
-const winning = live.offers[0];
-check('cheapest real bid ranks top', winning.supplier_email === 'supplier@test.in' || winning.price_inr <= targetPrice, `top=${winning.price_inr}`);
+const mine = live.offers.find((o) => o.supplier_email === 'supplier@test.in');
+check('the supplier bid appears on the board', !!mine, 'not found');
+// Offers rank by value score, not price alone, so the cheapest need not be
+// first. What must hold is that a ranking exists and one AI pick is flagged.
+check('board stays ranked after a new bid', live.offers.every((o, i, a) => i === 0 || a[i - 1].value_score >= o.value_score));
+check('still exactly one AI pick', live.offers.filter((o) => o.ai_pick).length === 1);
 
 // --- payment ---------------------------------------------------------------
 section('Payment');

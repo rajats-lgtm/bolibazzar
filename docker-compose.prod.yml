@@ -1,0 +1,165 @@
+# BoliBazzar production stack.
+#
+#   cp .env.prod.example .env.prod   # fill in every value
+#   ./scripts/prod.sh up
+#
+# Caddy terminates TLS and is the only container with published ports.
+# Everything else talks over the internal network and is unreachable from
+# outside the host.
+
+name: bolibazzar
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    logging: *logging
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"     # HTTP/3
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN}
+      LANDING_DOMAIN: ${LANDING_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data      # certificates — losing this re-issues them
+      - caddy-config:/config
+    depends_on:
+      api: { condition: service_healthy }
+      admin: { condition: service_started }
+      landing: { condition: service_started }
+
+  mongo:
+    image: mongo:7
+    restart: always
+    logging: *logging
+    command: ["--auth", "--bind_ip_all"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${DB_NAME}
+      MONGO_APP_USER: ${MONGO_APP_USER}
+      MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD}
+    volumes:
+      - mongo-data:/data/db
+      - ./deploy/mongo-init.js:/docker-entrypoint-initdb.d/init.js:ro
+    # Never published: only the app containers reach it.
+    expose: ["27017"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand('ping').ok"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits: { memory: 1g }
+
+  api:
+    image: bolibazzar/api:${IMAGE_TAG:-prod}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_BASE_URL: https://${APP_DOMAIN}
+        NEXT_PUBLIC_RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID}
+    restart: always
+    logging: *logging
+    depends_on:
+      mongo: { condition: service_healthy }
+    environment:
+      NODE_ENV: production
+      # Disables dev logins and test payments regardless of any other flag.
+      APP_ENV: production
+      MONGO_URL: mongodb://${MONGO_APP_USER}:${MONGO_APP_PASSWORD}@mongo:27017/${DB_NAME}?authSource=${DB_NAME}
+      DB_NAME: ${DB_NAME}
+      NEXT_PUBLIC_BASE_URL: https://${APP_DOMAIN}
+      CORS_ORIGINS: https://${APP_DOMAIN},https://${ADMIN_DOMAIN},https://${LANDING_DOMAIN}
+      SESSION_SECRET: ${SESSION_SECRET}
+      ADMIN_EMAILS: ${ADMIN_EMAILS}
+      ADMIN_ACCESS_KEY: ${ADMIN_ACCESS_KEY}
+      EMERGENT_LLM_KEY: ${EMERGENT_LLM_KEY}
+      EMERGENT_LLM_BASE_URL: ${EMERGENT_LLM_BASE_URL}
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      MAIL_FROM: ${MAIL_FROM}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      WHATSAPP_FROM: ${WHATSAPP_FROM}
+      AUCTION_WINDOW_SECONDS: ${AUCTION_WINDOW_SECONDS:-120}
+      DEMO_BIDDERS: ${DEMO_BIDDERS:-false}
+    expose: ["3000"]
+    deploy:
+      resources:
+        limits: { memory: 1g }
+
+  admin:
+    image: bolibazzar/admin:${IMAGE_TAG:-prod}
+    build:
+      context: .
+      dockerfile: apps/admin-web/Dockerfile
+      args:
+        ADMIN_API_ORIGIN: http://api:3000
+    restart: always
+    logging: *logging
+    depends_on:
+      api: { condition: service_healthy }
+    environment:
+      NODE_ENV: production
+      ADMIN_API_ORIGIN: http://api:3000
+    expose: ["3001"]
+    deploy:
+      resources:
+        limits: { memory: 512m }
+
+  landing:
+    image: bolibazzar/landing:${IMAGE_TAG:-prod}
+    build:
+      context: .
+      dockerfile: apps/desktop-landing/Dockerfile
+      args:
+        NEXT_PUBLIC_APP_URL: https://${APP_DOMAIN}
+        NEXT_PUBLIC_APP_STORE_URL: ${APP_STORE_URL}
+        NEXT_PUBLIC_PLAY_STORE_URL: ${PLAY_STORE_URL}
+    restart: always
+    logging: *logging
+    environment:
+      NODE_ENV: production
+    expose: ["3002"]
+    deploy:
+      resources:
+        limits: { memory: 512m }
+
+  # Nightly mongodump. Archives land in the backups volume; copy them off-host.
+  backup:
+    image: mongo:7
+    restart: always
+    logging: *logging
+    depends_on:
+      mongo: { condition: service_healthy }
+    environment:
+      MONGO_URL: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/${DB_NAME}?authSource=admin
+      RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - ./deploy/backup.sh:/usr/local/bin/backup.sh:ro
+      - backups:/backups
+    entrypoint: ["sh", "-c", "while true; do sleep 86400; /usr/local/bin/backup.sh || echo '[backup] FAILED'; done"]
+
+volumes:
+  mongo-data:
+  caddy-data:
+  caddy-config:
+  backups:

@@ -1,0 +1,48 @@
+# Reverse proxy and automatic TLS.
+#
+# Caddy obtains and renews Let's Encrypt certificates on its own, so the app
+# containers only ever speak plain HTTP on the internal network.
+
+{
+	email {$ACME_EMAIL}
+}
+
+# Customer app + API
+{$APP_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy api:3000
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options SAMEORIGIN
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+}
+
+# Public marketing site
+{$LANDING_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy landing:3002
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		-Server
+	}
+}
+
+# Private admin console.
+# Restrict it further here (IP allowlist, mTLS or an identity proxy) before
+# exposing it to the internet — the access key is the only other gate.
+{$ADMIN_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy admin:3001
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		X-Robots-Tag "noindex, nofollow"
+		-Server
+	}
+}

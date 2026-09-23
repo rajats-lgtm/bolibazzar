@@ -14,6 +14,7 @@ import {
 import { computeValueScore, computeTier } from '@/lib/scoring';
 import { advanceAuction, runAutoBidMatching, AUCTION_WINDOW_MS, demoBiddersEnabled } from '@/lib/bidding';
 import { createOrder, trackOrder, setOrderStage, findOrderByOffer, STAGE_KEYS } from '@/lib/orders';
+import { hasMailer } from '@/lib/mailer';
 import {
   hasWhatsApp, sendOtp, addNotification, listNotifications, markNotificationsRead,
   notifySuppliersOfRequest, notifyBuyerOfOffer, notifySupplierOfWin, notifyChatMessage,
@@ -248,6 +249,7 @@ async function route(req, { params }) {
       razorpay_live: hasRazorpay(),
       payments_test_mode: paymentsTestMode(),
       whatsapp_live: hasWhatsApp(),
+      email_live: hasMailer(),
       demo_bidders: demoBiddersEnabled(),
       auction_window_seconds: Math.round(AUCTION_WINDOW_MS / 1000),
     });
@@ -304,8 +306,9 @@ async function route(req, { params }) {
 
     const code = generateOtp();
     const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+    const record = { id: uuidv4() };
     await db.collection('otps').insertOne({
-      id: uuidv4(),
+      id: record.id,
       destination, channel, role,
       email: isEmail(email) ? email : null,
       code_hash: hashOtp(destination, code),
@@ -315,7 +318,16 @@ async function route(req, { params }) {
       created_at: new Date().toISOString(),
     });
 
-    const delivery = await sendOtp(db, { destination, channel, code });
+    let delivery;
+    try {
+      delivery = await sendOtp(db, { destination, channel, code });
+    } catch (error) {
+      // A user who never receives a code cannot sign in, so surface this
+      // clearly instead of reporting a success they cannot act on.
+      console.error('[otp] delivery failed:', error.message);
+      await db.collection('otps').deleteOne({ id: record.id }).catch(() => {});
+      return err('could not send your login code, please try again shortly', 503);
+    }
     return ok({
       ok: true,
       destination,

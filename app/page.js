@@ -370,6 +370,17 @@ function NotificationBell({ enabled }) {
     setOpen(o => !o);
     if (!open && unread > 0) { await post('/notifications/read', {}); setUnread(0); }
   }
+
+  // This panel is hand-rolled rather than a Radix popover, so it does not get
+  // Escape-to-close for free. Without this it was the only overlay in the app
+  // that a keyboard user could not dismiss.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
+
   if (!enabled) return null;
 
   return (
@@ -385,7 +396,7 @@ function NotificationBell({ enabled }) {
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 mt-2 w-80 max-h-[26rem] overflow-y-auto rounded-2xl border border-white/10 bg-background/95 backdrop-blur-xl shadow-2xl z-50">
+          <div role="dialog" aria-label="Notifications" data-state="open" className="absolute right-0 mt-2 w-80 max-h-[26rem] overflow-y-auto rounded-2xl border border-white/10 bg-background/95 backdrop-blur-xl shadow-2xl z-50">
             <div className="p-3 border-b border-white/10 text-sm font-semibold">Notifications</div>
             {items.length === 0 ? (
               <div className="p-6 text-center text-sm text-muted-foreground">Nothing yet.</div>

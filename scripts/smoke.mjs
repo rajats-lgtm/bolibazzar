@@ -267,6 +267,54 @@ const store = await stranger.call('/store/supplier@test.in');
 check('storefront is public', !!store.supplier, store.error);
 check('GST not exposed publicly', store.supplier?.gst === undefined);
 
+// --- catalogue, own offers, single request ---------------------------------
+section('Lookups the apps depend on');
+const types = await stranger.call('/suppliers/types');
+check('business types are public', Array.isArray(types.supplier_types) && types.supplier_types.length > 0, JSON.stringify(types).slice(0, 100));
+
+const supplierMe = await supplier.call('/suppliers/me');
+check('supplier can read its own profile', supplierMe.supplier?.email === 'supplier@test.in', JSON.stringify(supplierMe).slice(0, 100));
+const strangerSupplierMe = await stranger.call('/suppliers/me');
+check('own profile requires supplier auth', strangerSupplierMe.status === 401, `got ${strangerSupplierMe.status}`);
+
+const ownOffers = await supplier.call('/offers/mine');
+check('supplier can list its own offers', Array.isArray(ownOffers.offers) && ownOffers.offers.length > 0, JSON.stringify(ownOffers).slice(0, 100));
+check('own offers carry the request context', !!ownOffers.offers?.[0]?.request_id || !!ownOffers.offers?.[0]?.request, JSON.stringify(ownOffers.offers?.[0] || {}).slice(0, 120));
+
+const oneRequest = await buyer.call(`/requests/${created.request.id}`);
+check('buyer can reopen a past request', oneRequest.request?.id === created.request.id, oneRequest.error);
+const strangerRequest = await stranger.call(`/requests/${created.request.id}`);
+check('another buyer cannot read it', strangerRequest.status === 401 || strangerRequest.status === 403, `got ${strangerRequest.status}`);
+
+// --- group buying ----------------------------------------------------------
+section('Group buying');
+const suggestion = await buyer.call(`/requests/${created.request.id}/group-suggestion`);
+check('group suggestion computed', typeof suggestion.similar_count === 'number' && !!suggestion.product_key, JSON.stringify(suggestion).slice(0, 120));
+
+const group = await buyer.call('/groups', { method: 'POST', body: JSON.stringify({ request_id: created.request.id }) });
+check('group created or matched', !!group.group?.id, group.error);
+check('creator is a member', (group.group?.members || []).some((m) => m.email === 'buyer@test.in'), JSON.stringify(group.group?.members || []).slice(0, 120));
+
+const rejoin = await buyer.call(`/groups/${group.group.id}/join`, { method: 'POST' });
+check('joining twice is refused', rejoin.status === 409, `got ${rejoin.status}`);
+const anonJoin = await stranger.call(`/groups/${group.group.id}/join`, { method: 'POST' });
+check('joining requires sign-in', anonJoin.status === 401, `got ${anonJoin.status}`);
+
+// --- reviews, read back ----------------------------------------------------
+section('Reviews (read)');
+const offerReview = await stranger.call(`/reviews/offer/${myOffer.id}`);
+check('an offer\'s review is readable', offerReview.ok === true, offerReview.error);
+const supplierReviews = await stranger.call(`/reviews/supplier/${bid.offer.supplier_id}`);
+check('supplier reviews are public', Array.isArray(supplierReviews.reviews), JSON.stringify(supplierReviews).slice(0, 100));
+check('reviewer email is never exposed', !(supplierReviews.reviews || []).some((r) => 'buyer_email' in r), 'buyer_email leaked');
+
+// --- push registration -----------------------------------------------------
+section('Push registration');
+const push = await buyer.call('/push/register', { method: 'POST', body: JSON.stringify({ expo_token: 'ExponentPushToken[smoke-test]' }) });
+check('push token accepted', push.ok === true, push.error);
+const anonPush = await stranger.call('/push/register', { method: 'POST', body: JSON.stringify({ expo_token: 'ExponentPushToken[nope]' }) });
+check('push registration requires sign-in', anonPush.status === 401, `got ${anonPush.status}`);
+
 // --- supplier KYC ----------------------------------------------------------
 section('Supplier KYC');
 {
@@ -430,6 +478,160 @@ const badAdmin = await admin.call('/admin/session', { method: 'POST', body: JSON
 check('bad admin key rejected', badAdmin.status === 403, `got ${badAdmin.status}`);
 const noAdmin = await stranger.call('/admin/overview');
 check('admin routes guarded', noAdmin.status === 401, `got ${noAdmin.status}`);
+
+// The guards above were the only admin coverage; the console itself was never
+// exercised. Sign in properly and walk it.
+const adminKey = process.env.ADMIN_ACCESS_KEY;
+const adminEmail = (process.env.ADMIN_EMAILS || '').split(',')[0].trim();
+if (!adminKey || !adminEmail) {
+  console.log('    \x1b[33mSkipping admin console checks — set ADMIN_ACCESS_KEY and ADMIN_EMAILS to run them.\x1b[0m');
+} else {
+  const login = await admin.call('/admin/session', { method: 'POST', body: JSON.stringify({ email: adminEmail, access_key: adminKey }) });
+  check('admin can sign in', login.ok === true, login.error);
+
+  const session = await admin.call('/admin/session');
+  check('admin session persists', session.email === adminEmail.toLowerCase(), JSON.stringify(session).slice(0, 100));
+
+  const overview = await admin.call('/admin/overview');
+  check('overview loads', overview.ok === true, overview.error);
+  check('overview counts real data', JSON.stringify(overview).includes('suppliers') || !!overview.stats, JSON.stringify(overview).slice(0, 140));
+
+  // Every type the console can browse, plus the settings view.
+  for (const type of ['customers', 'suppliers', 'requests', 'offers', 'orders', 'reviews', 'messages', 'payments', 'settings']) {
+    const records = await admin.call(`/admin/records?type=${type}&limit=5`);
+    check(`records: ${type}`, records.ok === true && Array.isArray(records.records), records.error || `status ${records.status}`);
+  }
+
+  const searched = await admin.call('/admin/records?type=suppliers&search=test');
+  check('records can be searched', searched.ok === true && Array.isArray(searched.records), searched.error);
+  // A regex metacharacter in the search box must not blow up or hang the query.
+  const nastySearch = await admin.call('/admin/records?type=suppliers&search=' + encodeURIComponent('a(('));
+  check('a malformed search is handled safely', nastySearch.ok === true, nastySearch.error || `status ${nastySearch.status}`);
+
+  const badType = await admin.call('/admin/records?type=platform_settings');
+  check('an unlisted record type is refused', badType.status >= 400, `got ${badType.status}`);
+
+  const setting = await admin.call('/admin/settings', { method: 'PATCH', body: JSON.stringify({ key: 'smoke_test_flag', value: true }) });
+  check('a platform setting can be written', setting.ok === true, setting.error);
+  const reserved = await admin.call('/admin/settings', { method: 'PATCH', body: JSON.stringify({ key: 'razorpay_secret', value: 'x' }) });
+  check('reserved setting keys are refused', reserved.status >= 400, `got ${reserved.status}`);
+  const badKey = await admin.call('/admin/settings', { method: 'PATCH', body: JSON.stringify({ key: 'Bad Key!', value: 1 }) });
+  check('malformed setting keys are refused', badKey.status >= 400, `got ${badKey.status}`);
+
+  // Every admin action above should have left a trail.
+  const audit = await admin.call('/admin/audit');
+  check('audit log loads', Array.isArray(audit.entries) || Array.isArray(audit.audit), JSON.stringify(audit).slice(0, 120));
+  const trail = JSON.stringify(audit);
+  check('the failed login was recorded', trail.includes('login_failed'), '');
+  check('the setting change was recorded', trail.includes('update_platform_setting'), '');
+
+  // --- moderation ----------------------------------------------------------
+  // These are the console's action buttons. Nothing exercised them before, so
+  // a broken moderation path would have shipped silently.
+  section('Admin moderation');
+
+  const suspend = await admin.call('/admin/customers/buyer%40test.in/status', { method: 'PATCH', body: JSON.stringify({ status: 'suspended', reason: 'smoke test' }) });
+  check('a customer can be suspended', suspend.ok === true && suspend.status === 'suspended', suspend.error);
+  const restore = await admin.call('/admin/customers/buyer%40test.in/status', { method: 'PATCH', body: JSON.stringify({ status: 'active', reason: 'smoke test done' }) });
+  check('and restored', restore.ok === true && restore.status === 'active', restore.error);
+  const badStatus = await admin.call('/admin/customers/buyer%40test.in/status', { method: 'PATCH', body: JSON.stringify({ status: 'banished' }) });
+  check('an invalid customer status is refused', badStatus.status >= 400, `got ${badStatus.status}`);
+  const ghost = await admin.call('/admin/customers/nobody%40nowhere.test/status', { method: 'PATCH', body: JSON.stringify({ status: 'suspended' }) });
+  check('an unknown customer is a 404', ghost.status === 404, `got ${ghost.status}`);
+
+  const walletBefore = await buyer.call('/wallet');
+  const credit = await admin.call('/admin/customers/buyer%40test.in/wallet', { method: 'PATCH', body: JSON.stringify({ amount_inr: 500, reason: 'goodwill' }) });
+  check('wallet can be credited', credit.ok === true, credit.error);
+  check('the credit lands on the balance', credit.balance_inr === (walletBefore.wallet?.balance_inr || 0) + 500, `${walletBefore.wallet?.balance_inr} -> ${credit.balance_inr}`);
+  const debit = await admin.call('/admin/customers/buyer%40test.in/wallet', { method: 'PATCH', body: JSON.stringify({ amount_inr: -500, reason: 'reversing' }) });
+  check('and debited back', debit.ok === true && debit.balance_inr === walletBefore.wallet?.balance_inr, `${debit.balance_inr}`);
+  const zero = await admin.call('/admin/customers/buyer%40test.in/wallet', { method: 'PATCH', body: JSON.stringify({ amount_inr: 0 }) });
+  check('a zero adjustment is refused', zero.status >= 400, `got ${zero.status}`);
+  const overdraw = await admin.call('/admin/customers/buyer%40test.in/wallet', { method: 'PATCH', body: JSON.stringify({ amount_inr: -99999999 }) });
+  check('a wallet cannot be driven negative', overdraw.status >= 400, `got ${overdraw.status}`);
+
+  const supplierStatus = await admin.call(`/admin/suppliers/${bid.offer.supplier_id}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'approved', reason: 'smoke test' }) });
+  check('supplier status can be set', supplierStatus.ok === true, supplierStatus.error);
+  const badSupplierStatus = await admin.call(`/admin/suppliers/${bid.offer.supplier_id}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'vibes' }) });
+  check('an invalid supplier status is refused', badSupplierStatus.status >= 400, `got ${badSupplierStatus.status}`);
+
+  const escalate = await admin.call(`/admin/requests/${created.request.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'escalated', note: 'smoke test' }) });
+  check('a request can be escalated', escalate.ok === true && escalate.status === 'escalated', escalate.error);
+  const badRequestStatus = await admin.call(`/admin/requests/${created.request.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'nonsense' }) });
+  check('an invalid request status is refused', badRequestStatus.status >= 400, `got ${badRequestStatus.status}`);
+
+  const moderateOffer = await admin.call(`/admin/offers/${bid.offer.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'pending', reason: 'smoke test' }) });
+  check('an offer can be moderated', moderateOffer.ok === true, moderateOffer.error);
+  const badOfferStatus = await admin.call(`/admin/offers/${bid.offer.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'maybe' }) });
+  check('an invalid offer status is refused', badOfferStatus.status >= 400, `got ${badOfferStatus.status}`);
+
+  // Hiding a review must actually remove it from the public storefront.
+  const reviewsBefore = await stranger.call(`/reviews/supplier/${bid.offer.supplier_id}`);
+  const someReview = (reviewsBefore.reviews || [])[0];
+  if (someReview) {
+    const hide = await admin.call(`/admin/reviews/${someReview.id}/visibility`, { method: 'PATCH', body: JSON.stringify({ visibility: 'hidden', reason: 'smoke test' }) });
+    check('a review can be hidden', hide.ok === true, hide.error);
+    const reviewsAfter = await stranger.call(`/reviews/supplier/${bid.offer.supplier_id}`);
+    check('a hidden review disappears from the storefront', !(reviewsAfter.reviews || []).some((r) => r.id === someReview.id), '');
+    const show = await admin.call(`/admin/reviews/${someReview.id}/visibility`, { method: 'PATCH', body: JSON.stringify({ visibility: 'visible' }) });
+    check('and can be restored', show.ok === true, show.error);
+    const badVisibility = await admin.call(`/admin/reviews/${someReview.id}/visibility`, { method: 'PATCH', body: JSON.stringify({ visibility: 'sort-of' }) });
+    check('an invalid visibility is refused', badVisibility.status >= 400, `got ${badVisibility.status}`);
+  }
+
+  const payments = await admin.call('/admin/records?type=payments&limit=1');
+  const somePayment = (payments.records || [])[0];
+  if (somePayment) {
+    const reviewed = await admin.call(`/admin/payments/${somePayment.id}/review`, { method: 'PATCH', body: JSON.stringify({ review_status: 'reconciled', note: 'smoke test' }) });
+    check('a payment can be marked reconciled', reviewed.ok === true, reviewed.error);
+    const badReview = await admin.call(`/admin/payments/${somePayment.id}/review`, { method: 'PATCH', body: JSON.stringify({ review_status: 'whatever' }) });
+    check('an invalid payment review status is refused', badReview.status >= 400, `got ${badReview.status}`);
+  }
+
+  // Suspension must cut off a session that already exists. Sessions are
+  // stateless signed tokens, so an account-status check at login alone left a
+  // suspended user free to keep buying until their token expired.
+  const victim = makeClient('suspended');
+  const victimEmail = `suspended+${Date.now()}@bolibazzar.test`;
+  const victimOtp = await victim.call('/auth/otp/request', { method: 'POST', body: JSON.stringify({ email: victimEmail }) });
+  const victimLogin = await victim.call('/auth/otp/verify', { method: 'POST', body: JSON.stringify({ email: victimEmail, code: victimOtp.dev_code, name: 'Suspended Tester' }) });
+  check('the test account signs in first', victimLogin.ok === true, victimLogin.error);
+
+  const beforeSuspend = await victim.call('/me');
+  check('and can use the app', beforeSuspend.ok === true, `status ${beforeSuspend.status}`);
+
+  await admin.call(`/admin/customers/${encodeURIComponent(victimEmail)}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'suspended', reason: 'smoke test' }) });
+
+  const afterSuspend = await victim.call('/me');
+  check('suspension blocks the existing cookie session', afterSuspend.status === 403, `got ${afterSuspend.status}`);
+  const stillPosting = await victim.call('/requests', { method: 'POST', body: JSON.stringify({ requirement: { product: 'test', budget_inr: 100 }, raw_text: 'test' }) });
+  check('a suspended user cannot post a request', stillPosting.status === 403, `got ${stillPosting.status}`);
+  const stillSpending = await victim.call('/wallet');
+  check('a suspended user cannot reach their wallet', stillSpending.status === 403, `got ${stillSpending.status}`);
+
+  if (typeof victimLogin.token === 'string') {
+    const viaBearer = await bearerCall('/me', victimLogin.token);
+    check('and the mobile bearer token is cut off too', viaBearer.status === 403, `got ${viaBearer.status}`);
+  }
+
+  const reLogin = await victim.call('/auth/otp/request', { method: 'POST', body: JSON.stringify({ email: victimEmail }) });
+  const reVerify = await victim.call('/auth/otp/verify', { method: 'POST', body: JSON.stringify({ email: victimEmail, code: reLogin.dev_code }) });
+  check('and they cannot log back in', reVerify.status === 403, `got ${reVerify.status}`);
+
+  await admin.call(`/admin/customers/${encodeURIComponent(victimEmail)}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'active' }) });
+  const restored = await victim.call('/me');
+  check('restoring the account restores access', restored.ok === true, `status ${restored.status}`);
+
+  // Moderation must never be reachable without an admin session.
+  const sneaky = await stranger.call('/admin/customers/buyer%40test.in/wallet', { method: 'PATCH', body: JSON.stringify({ amount_inr: 100000 }) });
+  check('moderation rejects a non-admin', sneaky.status === 401 || sneaky.status === 403, `got ${sneaky.status}`);
+  const buyerSneaky = await buyer.call(`/admin/requests/${created.request.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'cancelled' }) });
+  check('a signed-in buyer is still not an admin', buyerSneaky.status === 401 || buyerSneaky.status === 403, `got ${buyerSneaky.status}`);
+
+  await admin.call('/admin/session', { method: 'DELETE' });
+  const afterLogout = await admin.call('/admin/overview');
+  check('admin logout ends the session', afterLogout.status === 401, `got ${afterLogout.status}`);
+}
 
 // --- summary ---------------------------------------------------------------
 console.log(`\n${'─'.repeat(56)}`);

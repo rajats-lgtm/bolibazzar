@@ -223,6 +223,23 @@ async function currentSupplier(db, req) {
   return db.collection('suppliers').findOne({ email }, { projection: { _id: 0 } });
 }
 
+/**
+ * Returns a message when the signed-in account has been suspended, so the
+ * caller can refuse the request. Both lookups are on indexed `email` fields
+ * with a one-key projection.
+ */
+async function suspendedSession(db, { buyer, supplier }) {
+  if (buyer) {
+    const user = await db.collection('users').findOne({ email: buyer }, { projection: { _id: 0, status: 1 } });
+    if (user?.status === 'suspended') return 'this account is suspended';
+  }
+  if (supplier) {
+    const account = await db.collection('suppliers').findOne({ email: supplier }, { projection: { _id: 0, status: 1 } });
+    if (account?.status === 'suspended') return 'this supplier account is suspended';
+  }
+  return null;
+}
+
 /** A request is readable by its owner, by any supplier, or by anyone when it has no owner. */
 function canReadRequest(request, { buyer, supplier }) {
   if (!request.buyer_email) return true;
@@ -285,6 +302,19 @@ async function route(req, { params }) {
   const db = await getDb();
   const buyer = buyerEmail(req);
   const supplierSession = supplierEmail(req);
+
+  // Sessions are stateless signed tokens, so suspending an account cannot
+  // invalidate one that is already out there. Without this check, suspension
+  // only stops the next login: a suspended user keeps buying, chatting and
+  // spending their wallet until the token expires on its own. Check the
+  // account's standing on every authenticated request instead.
+  //
+  // Auth routes are exempt so a suspended user can still be told why at login
+  // and can still sign out.
+  if (!path.startsWith('/auth/')) {
+    const suspended = await suspendedSession(db, { buyer, supplier: supplierSession });
+    if (suspended) return err(suspended, 403);
+  }
 
   // =========================================================================
   // AUTH — one-time passcode

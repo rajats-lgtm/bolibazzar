@@ -68,6 +68,8 @@ try {
   const landingText = await page.evaluate(() => document.body.innerText);
   check('hero renders', /Sellers Compete/.test(landingText));
   check('store buttons render', /App Store/.test(landingText) && /Google Play/.test(landingText));
+  check('sign-up and sign-in offered', /Create an account/.test(landingText) && /Sign in/.test(landingText));
+  check('animated walkthrough present', /Watch a real auction happen/.test(landingText));
   await page.screenshot({ path: `${shots}/01-landing.png` });
 
   console.log('\n\x1b[1mBuyer app\x1b[0m');
@@ -88,6 +90,18 @@ try {
   });
   check('sign-in button present', signedIn);
   await sleep(900);
+
+  // Sign-in now forks by role first, exactly as the mobile apps do.
+  const roleShown = await waitFor(
+    page,
+    () => [...document.querySelectorAll('button')].some((b) => /Log in as a buyer/.test(b.textContent)),
+    { label: 'role choice' }
+  );
+  check('sign-in offers buyer and supplier', roleShown);
+  await page.evaluate(() => {
+    [...document.querySelectorAll('button')].find((b) => /Log in as a buyer/.test(b.textContent))?.click();
+  });
+  await sleep(700);
 
   await waitFor(page, () => !!document.querySelector('input[type="email"]'), { label: 'email field' });
   await page.evaluate(() => {

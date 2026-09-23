@@ -7,6 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Logo from '../components/Logo';
 import { colors } from '../lib/theme';
 import { getSession, homeFor } from '../lib/session';
+import HowItWorks from '../components/HowItWorks';
 
 /**
  * Landing screen — the first thing anyone sees.
@@ -14,13 +15,6 @@ import { getSession, homeFor } from '../lib/session';
  * Mirrors the desktop landing page: the pitch, how it works, and the two ways
  * in. Someone already signed in is sent straight to their side of the app.
  */
-
-const STEPS = [
-  { icon: 'sparkles-outline', title: 'Tell AI what you want', body: 'Type or speak it in English, Hindi, Tamil or Marathi.' },
-  { icon: 'notifications-outline', title: 'Verified sellers are notified', body: 'Only matching, GST-registered suppliers. No spam.' },
-  { icon: 'trending-down-outline', title: 'They compete live', body: 'Prices drop in real time as sellers bid to win you.' },
-  { icon: 'bag-check-outline', title: 'Chat, pay, track', body: 'Negotiate, pay by UPI, follow it to your door.' },
-] as const;
 
 export default function Landing() {
   const [checking, setChecking] = useState(true);
@@ -84,19 +78,15 @@ export default function Landing() {
         </TouchableOpacity>
 
         <View style={{ marginTop: 44 }}>
-          <Text style={{ color: colors.text, fontWeight: '700', fontSize: 18, marginBottom: 18 }}>How it works</Text>
-          {STEPS.map((step, i) => (
-            <View key={step.title} style={{ flexDirection: 'row', gap: 14, marginBottom: 20 }}>
-              <View style={{ width: 42, height: 42, borderRadius: 12, backgroundColor: 'rgba(225,29,72,0.10)', borderColor: colors.border, borderWidth: 1, alignItems: 'center', justifyContent: 'center' }}>
-                <Ionicons name={step.icon as any} size={19} color={colors.fuchsia} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: colors.muted, fontSize: 11, letterSpacing: 0.8 }}>STEP {i + 1}</Text>
-                <Text style={{ color: colors.text, fontWeight: '600', fontSize: 15, marginTop: 2 }}>{step.title}</Text>
-                <Text style={{ color: colors.muted, fontSize: 13, marginTop: 3, lineHeight: 19 }}>{step.body}</Text>
-              </View>
-            </View>
-          ))}
+          <Text style={{ color: colors.muted, fontSize: 12, letterSpacing: 0.8, marginBottom: 6 }}>SEE IT WORK</Text>
+          <Text style={{ color: colors.text, fontWeight: '700', fontSize: 22, marginBottom: 6 }}>
+            Watch a real auction happen
+          </Text>
+          <Text style={{ color: colors.muted, fontSize: 14, lineHeight: 21, marginBottom: 20 }}>
+            Post what you want. Verified sellers bid against each other in a live
+            window, and the price only moves one way.
+          </Text>
+          <HowItWorks />
         </View>
 
         <View style={{ marginTop: 16, borderTopColor: colors.border, borderTopWidth: 1, paddingTop: 20 }}>

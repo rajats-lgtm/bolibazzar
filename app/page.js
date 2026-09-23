@@ -35,6 +35,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator, DropdownMenuLabel } from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
+import HowItWorksAnimation from '@/components/marketing/HowItWorksAnimation';
 
 const EXAMPLES = [
   'I need iPhone 17 Pro Max 256GB Black under ₹1,20,000',
@@ -176,7 +177,58 @@ function takeGuestRequests() {
 }
 
 // ============ LOGIN MODAL (one-time passcode) ============
-function LoginModal({ open, onOpenChange, onLogin, role = 'buyer' }) {
+function AuthModal({ open, onOpenChange, onAuthed, mode = 'signin', role: fixedRole = null }) {
+  // Mirrors the mobile flow: pick buyer or supplier, then verify by code.
+  const [role, setRole] = useState(fixedRole);
+  useEffect(() => { if (open) setRole(fixedRole); }, [open, fixedRole]);
+  if (open && !role) {
+    const verb = mode === 'signup' ? 'Sign up' : 'Log in';
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-w-md bg-background/95 border-white/10">
+          <DialogHeader>
+            <DialogTitle className="text-2xl">
+              {mode === 'signup' ? 'Create your account' : 'Welcome back'}
+            </DialogTitle>
+            <DialogDescription>
+              {mode === 'signup' ? 'Choose the kind of account you need.' : 'Choose how you want to log in.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {[
+              { r: 'buyer', icon: ShoppingBag, title: `${verb} as a buyer`, body: 'Tell AI what you want to buy and let verified sellers compete for your business.' },
+              { r: 'supplier', icon: Store, title: `${verb} as a supplier`, body: 'Get live buyer requests with real budgets and win them with your best price.' },
+            ].map(({ r, icon: Icon, title, body }) => (
+              <button
+                key={r}
+                onClick={() => setRole(r)}
+                className="w-full text-left flex items-center gap-4 p-4 rounded-2xl border border-white/10 bg-white/[0.02] hover:bg-white/[0.05] hover:border-white/20 transition"
+              >
+                <span className="h-11 w-11 shrink-0 rounded-xl bg-fuchsia-500/10 grid place-items-center">
+                  <Icon className="w-5 h-5 text-fuchsia-400" />
+                </span>
+                <span className="flex-1">
+                  <span className="block font-semibold">{title}</span>
+                  <span className="block text-sm text-muted-foreground mt-0.5">{body}</span>
+                </span>
+                <ChevronRight className="w-5 h-5 text-muted-foreground shrink-0" />
+              </button>
+            ))}
+          </div>
+          <div className="text-center text-sm text-muted-foreground mt-2">
+            {mode === 'signup' ? 'Already have an account? ' : 'New to BoliBazzar? '}
+            <button className="text-fuchsia-400 font-medium" onClick={() => onOpenChange({ mode: mode === 'signup' ? 'signin' : 'signup' })}>
+              {mode === 'signup' ? 'Sign in' : 'Create an account'}
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+  return <OtpModal open={open} onOpenChange={onOpenChange} onAuthed={onAuthed} role={role} mode={mode} onBack={() => setRole(null)} />;
+}
+
+function OtpModal({ open, onOpenChange, onAuthed, role, mode, onBack }) {
   const [step, setStep] = useState('identify');
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -211,13 +263,15 @@ function LoginModal({ open, onOpenChange, onLogin, role = 'buyer' }) {
     setLoading(true);
     const r = await post('/auth/otp/verify', {
       email, code: code.trim(), role, name: name.trim() || undefined,
+      business_name: role === 'supplier' ? name.trim() || undefined : undefined,
       claim_request_ids: role === 'buyer' ? takeGuestRequests() : undefined,
     });
     setLoading(false);
     if (!r.ok) return toast.error(r.error || 'Could not verify the code');
-    onLogin(role === 'supplier' ? r.supplier : r.user);
+    const account = role === 'supplier' ? r.supplier : r.user;
+    onAuthed(role, account);
     onOpenChange(false);
-    const who = role === 'supplier' ? r.supplier?.business_name : r.user?.name;
+    const who = role === 'supplier' ? account?.business_name : account?.name;
     toast.success('Welcome, ' + String(who || '').split(' ')[0]);
   }
 
@@ -225,8 +279,13 @@ function LoginModal({ open, onOpenChange, onLogin, role = 'buyer' }) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md bg-background/95 border-white/10">
         <DialogHeader>
-          <DialogTitle className="text-2xl">
-            {role === 'supplier' ? 'Supplier sign in' : 'Sign in to BoliBazzar'}
+          <DialogTitle className="text-2xl flex items-center gap-2">
+            {onBack && (
+              <button onClick={step === 'verify' ? () => setStep('identify') : onBack} className="text-muted-foreground hover:text-foreground">
+                <ChevronRight className="w-5 h-5 rotate-180" />
+              </button>
+            )}
+            {role === 'supplier' ? 'Supplier account' : 'Buyer account'}
           </DialogTitle>
           <DialogDescription>
             {step === 'identify'
@@ -1274,7 +1333,7 @@ function MyRequests({ user, onOpen }) {
 function SupplierDashboard({ onSignup }) {
   const [supplier, setSupplier] = useState(null);
   const [booting, setBooting] = useState(true);
-  const [loginOpen, setLoginOpen] = useState(false);
+  const [auth, setAuth] = useState(null); // { mode: 'signin' | 'signup' } | null
   const [requests, setRequests] = useState([]);
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1348,11 +1407,11 @@ function SupplierDashboard({ onSignup }) {
           <h1 className="text-3xl font-semibold mt-5">Supplier console</h1>
           <p className="text-muted-foreground mt-2">Sign in to see live buyer requests and bid on them. New here? Register your business to get verified.</p>
           <div className="mt-6 flex gap-2 justify-center">
-            <Button className="bg-gradient-to-br from-indigo-600 to-orange-500" onClick={() => setLoginOpen(true)}>Supplier sign in</Button>
+            <Button className="bg-gradient-to-br from-indigo-600 to-orange-500" onClick={() => setAuth({ mode: 'signin' })}>Supplier sign in</Button>
             <Button variant="outline" className="border-fuchsia-500/40" onClick={onSignup}><Building2 className="w-4 h-4 mr-2" />Register business</Button>
           </div>
         </div>
-        <LoginModal open={loginOpen} onOpenChange={setLoginOpen} role="supplier" onLogin={(s) => { setSupplier(s); }} />
+        <AuthModal open={!!auth} mode={auth?.mode || 'signin'} role="supplier" onOpenChange={(next) => setAuth(next && next.mode ? next : null)} onAuthed={(_role, account) => setSupplier(account)} />
       </div>
     );
   }
@@ -2119,7 +2178,7 @@ function StationeryView({ user }) {
 }
 
 // ============ APP LANDING (desktop-first, download focused) ============
-function AppLanding({ onOpenPWA }) {
+function AppLanding({ onSignIn, onSignUp }) {
   return (
     <div>
       {/* Hero */}
@@ -2138,7 +2197,7 @@ function AppLanding({ onOpenPWA }) {
             <p className="mt-6 text-lg text-muted-foreground max-w-xl">
               India&apos;s AI-powered reverse marketplace lives on your phone. Just speak or type what you want to buy — verified suppliers bid live, you pick the best offer, pay via UPI, and track till delivery.
             </p>
-            <div className="mt-8 flex gap-3 flex-wrap">
+            <div className="mt-6 flex gap-3 flex-wrap opacity-90">
               <a href="#" className="inline-flex items-center gap-3 rounded-2xl bg-foreground text-background px-5 py-3 hover:opacity-90 transition">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.53 4.08zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>
                 <div className="text-left"><div className="text-[10px] opacity-70">Download on the</div><div className="font-semibold text-lg leading-tight">App Store</div></div>
@@ -2148,7 +2207,14 @@ function AppLanding({ onOpenPWA }) {
                 <div className="text-left"><div className="text-[10px] opacity-70">Get it on</div><div className="font-semibold text-lg leading-tight">Google Play</div></div>
               </a>
             </div>
-            <button onClick={onOpenPWA} className="mt-4 text-sm text-muted-foreground hover:text-foreground underline underline-offset-4">Or try the web preview →</button>
+            <div className="mt-8 flex gap-3 flex-wrap">
+              <Button size="lg" className="h-12 px-7 rounded-2xl bg-gradient-to-br from-indigo-600 to-orange-500 text-base" onClick={onSignUp}>
+                Create an account
+              </Button>
+              <Button size="lg" variant="outline" className="h-12 px-7 rounded-2xl border-white/20 text-base" onClick={onSignIn}>
+                Sign in
+              </Button>
+            </div>
             <div className="mt-8 flex items-center gap-4 text-sm text-muted-foreground">
               <div className="flex items-center gap-1"><Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />4.8 ★ · 12k+ ratings</div>
               <span>·</span>
@@ -2183,6 +2249,25 @@ function AppLanding({ onOpenPWA }) {
                 ))}
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Animated walkthrough — the first thing a new visitor should see. */}
+      <section className="border-y border-white/5 bg-white/[0.012]">
+        <div className="container mx-auto px-6 py-20">
+          <div className="text-center mb-12">
+            <Badge variant="outline" className="mb-4 px-4 py-1.5">
+              <Sparkles className="w-3.5 h-3.5 mr-2 text-orange-400" />See it work
+            </Badge>
+            <h2 className="text-3xl md:text-4xl font-semibold">Watch a real auction happen</h2>
+            <p className="text-muted-foreground mt-3 max-w-xl mx-auto">
+              Post what you want. Verified sellers bid against each other in a live
+              window, and the price only moves one way.
+            </p>
+          </div>
+          <div className="max-w-4xl mx-auto">
+            <HowItWorksAnimation />
           </div>
         </div>
       </section>
@@ -2244,7 +2329,7 @@ function App() {
   const [storeSlug, setStoreSlug] = useState(null);
   const [showSplash, setShowSplash] = useState(false);
   const [user, setUser] = useState(null);
-  const [loginOpen, setLoginOpen] = useState(false);
+  const [auth, setAuth] = useState(null); // { mode: 'signin' | 'signup' } | null
   const [supplierSignupOpen, setSupplierSignupOpen] = useState(false);
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(false);
@@ -2292,6 +2377,7 @@ function App() {
   async function logout() {
     await api('/auth/session', { method: 'DELETE', body: JSON.stringify({ role: 'buyer' }) });
     setUser(null); setWallet(null); setTier(null);
+    setMode('landing');
     toast.success('Signed out');
   }
 
@@ -2365,7 +2451,7 @@ function App() {
   }
 
   function acceptOffer(offer) {
-    if (!user) { setLoginOpen(true); toast.info('Sign in to complete your purchase'); return; }
+    if (!user) { setAuth({ mode: 'signin' }); toast.info('Sign in to complete your purchase'); return; }
     setPayOffer(offer);
   }
 
@@ -2384,9 +2470,21 @@ function App() {
     setRequest(rr.request); setOffers(rr.offers || []); setAuction(null); setView('offers');
   }
 
-  function openPWA() { setMode('app'); setView('home'); }
+  /** Send a freshly-authenticated account to its own side of the app. */
+  function onAuthed(role, account) {
+    if (role === 'supplier') {
+      setMode('app');
+      setView('supplier');
+      return;
+    }
+    setUser(account);
+    setTier(account?.tier || null);
+    setMode('app');
+    setView('home');
+  }
 
-  // ============ LANDING MODE (public desktop) ============
+  // ============ LANDING MODE (public) ============
+  // Shown to every first-time visitor, exactly as on mobile.
   if (mode === 'landing') {
     return (
       <div>
@@ -2399,12 +2497,24 @@ function App() {
             </button>
             <div className="flex items-center gap-2">
               <ThemeToggle />
-              <Button size="sm" className="bg-gradient-to-br from-indigo-600 to-orange-500" onClick={openPWA}>Try web preview</Button>
+              <Button size="sm" variant="ghost" onClick={() => setAuth({ mode: 'signin' })}>Sign in</Button>
+              <Button size="sm" className="bg-gradient-to-br from-indigo-600 to-orange-500" onClick={() => setAuth({ mode: 'signup' })}>
+                Get started
+              </Button>
             </div>
           </div>
         </header>
-        <AppLanding onOpenPWA={openPWA} />
+        <AppLanding
+          onSignIn={() => setAuth({ mode: 'signin' })}
+          onSignUp={() => setAuth({ mode: 'signup' })}
+        />
         <Footer />
+        <AuthModal
+          open={!!auth}
+          mode={auth?.mode || 'signin'}
+          onOpenChange={(next) => setAuth(next && next.mode ? next : null)}
+          onAuthed={onAuthed}
+        />
       </div>
     );
   }
@@ -2418,7 +2528,7 @@ function App() {
         view={view}
         setView={(v) => { setView(v); if (v === 'home') { setRequest(null); setOffers([]); setAuction(null); } }}
         user={user} booting={booting}
-        onLogin={() => setLoginOpen(true)} onLogout={logout}
+        onLogin={() => setAuth({ mode: 'signin' })} onLogout={logout}
         onSupplierSignup={() => setSupplierSignupOpen(true)}
         wallet={wallet} tier={tier}
       />
@@ -2433,7 +2543,12 @@ function App() {
       {view === 'store' && storeSlug && (<><BrandStore slug={storeSlug} onClose={() => { setStoreSlug(null); setView('home'); if (typeof window !== 'undefined') window.history.replaceState({}, '', '/'); }} /><Footer /></>)}
 
       {requirement && <RequirementPreview requirement={requirement} onConfirm={confirmRequirement} onCancel={() => setRequirement(null)} confirming={confirming} />}
-      <LoginModal open={loginOpen} onOpenChange={setLoginOpen} onLogin={(u) => { setUser(u); setTier(u?.tier || null); }} />
+      <AuthModal
+        open={!!auth}
+        mode={auth?.mode || 'signin'}
+        onOpenChange={(next) => setAuth(next && next.mode ? next : null)}
+        onAuthed={onAuthed}
+      />
       <SupplierSignupModal open={supplierSignupOpen} onOpenChange={setSupplierSignupOpen} onDone={() => setView('supplier')} />
       {chatOffer && <ChatSheet offer={chatOffer} user={user} onClose={() => setChatOffer(null)} />}
       {payOffer && <PaymentModal offer={payOffer} user={user} wallet={wallet} tier={tier} onReloadWallet={loadWallet} onClose={() => setPayOffer(null)} onPaid={() => { onPaid(payOffer); setPayOffer(null); }} />}

@@ -6,6 +6,7 @@ import {
   Sparkles, Star, Shield, Search, Bell, TrendingDown, Package, ShoppingBag,
   Sun, Moon, Truck, Wallet, MessageSquare, Languages,
 } from 'lucide-react';
+import HowItWorksAnimation from '../components/HowItWorksAnimation';
 
 /**
  * Public marketing site for BoliBazzar.
@@ -15,6 +16,13 @@ import {
  */
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+
+/**
+ * The app forks by role before asking for a code, on web and on mobile alike.
+ * These links open that same fork, optionally pre-picking a side, so a visitor
+ * who clicks "Register your business" never has to choose supplier twice.
+ */
+const authUrl = (mode, role) => `${APP_URL}/?auth=${mode}${role ? `&role=${role}` : ''}`;
 const APP_STORE_URL = process.env.NEXT_PUBLIC_APP_STORE_URL || '';
 const PLAY_STORE_URL = process.env.NEXT_PUBLIC_PLAY_STORE_URL || '';
 
@@ -132,8 +140,11 @@ export default function Landing() {
           </div>
           <div className="flex items-center gap-2">
             <ThemeToggle />
-            <a href={`${APP_URL}/?app`} className="rounded-md bg-gradient-to-br from-indigo-600 to-orange-500 text-white px-4 py-2 text-sm font-medium hover:opacity-90 transition">
-              Open the web app
+            <a href={authUrl('signin')} className="rounded-md px-3 py-2 text-sm font-medium bb-muted hover:opacity-80 transition">
+              Sign in
+            </a>
+            <a href={authUrl('signup')} className="rounded-md bg-gradient-to-br from-indigo-600 to-orange-500 text-white px-4 py-2 text-sm font-medium hover:opacity-90 transition">
+              Create an account
             </a>
           </div>
         </div>
@@ -169,9 +180,17 @@ export default function Landing() {
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 20.5V3.5a1.5 1.5 0 011.5-1.5c.28 0 .55.08.78.22l13 7.5a1.5 1.5 0 010 2.6l-13 7.5A1.5 1.5 0 013 20.5z" /></svg>
               </StoreButton>
             </div>
-            <a href={`${APP_URL}/?app`} className="mt-4 inline-block text-sm bb-muted hover:opacity-80 underline underline-offset-4">
-              Or try it in your browser →
-            </a>
+            <div className="mt-5 flex items-center gap-3 flex-wrap">
+              <a href={authUrl('signup')} className="rounded-xl bg-gradient-to-br from-indigo-600 to-orange-500 text-white px-5 py-2.5 text-sm font-medium hover:opacity-90 transition">
+                Create an account
+              </a>
+              <a href={authUrl('signin')} className="rounded-xl border bb-border px-5 py-2.5 text-sm font-medium hover:opacity-80 transition">
+                Sign in
+              </a>
+              <a href={`${APP_URL}/?app`} className="text-sm bb-muted hover:opacity-80 underline underline-offset-4">
+                Or look around first →
+              </a>
+            </div>
             <div className="mt-8 flex items-center gap-4 text-sm bb-muted flex-wrap">
               <span className="flex items-center gap-1"><Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />4.8 · 12k+ ratings</span>
               <span aria-hidden="true">·</span>
@@ -233,13 +252,20 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* How it works */}
+      {/* How it works — the real flow, replayed */}
       <section className="container mx-auto px-6 py-20">
-        <h2 className="text-3xl md:text-4xl font-semibold text-center">How BoliBazzar works</h2>
-        <p className="bb-muted text-center mt-3 max-w-2xl mx-auto">
-          A reverse marketplace: you post what you need, and sellers come to you.
-        </p>
-        <div className="mt-12 grid md:grid-cols-3 gap-5">
+        <div className="text-center">
+          <span className="text-xs bb-muted uppercase tracking-[0.2em]">See it work</span>
+          <h2 className="mt-3 text-3xl md:text-4xl font-semibold">Watch a real auction happen</h2>
+          <p className="bb-muted mt-3 max-w-2xl mx-auto">
+            Post what you want. Verified sellers bid against each other in a live window,
+            and the price only moves one way.
+          </p>
+        </div>
+        <div className="mt-12 max-w-5xl mx-auto">
+          <HowItWorksAnimation />
+        </div>
+        <div className="mt-14 grid md:grid-cols-3 gap-5">
           {STEPS.map((step, i) => (
             <div key={step.title} className="rounded-2xl border bb-border bb-surface p-6">
               <div className="flex items-center gap-3">
@@ -278,9 +304,14 @@ export default function Landing() {
           <p className="bb-muted mt-3 max-w-xl mx-auto">
             Stop paying for clicks. Get real buyers with real budgets, already telling you exactly what they want to buy.
           </p>
-          <a href={`${APP_URL}/?app&view=supplier`} className="mt-8 inline-block rounded-xl bg-gradient-to-br from-indigo-600 to-orange-500 text-white px-6 py-3 font-medium hover:opacity-90 transition">
-            Register your business
-          </a>
+          <div className="mt-8 flex items-center justify-center gap-3 flex-wrap">
+            <a href={authUrl('signup', 'supplier')} className="rounded-xl bg-gradient-to-br from-indigo-600 to-orange-500 text-white px-6 py-3 font-medium hover:opacity-90 transition">
+              Register your business
+            </a>
+            <a href={authUrl('signin', 'supplier')} className="rounded-xl border bb-border px-6 py-3 font-medium hover:opacity-80 transition">
+              Supplier sign in
+            </a>
+          </div>
         </div>
       </section>
 

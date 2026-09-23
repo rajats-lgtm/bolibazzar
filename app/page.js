@@ -2388,7 +2388,17 @@ function App() {
     setStoreSlug(params.get('store'));
     if (params.get('store')) setView('store');
     else if (params.get('view')) setView(params.get('view'));
-    if (nextMode === 'landing' || nextMode === 'app') {
+
+    // Deep link straight into an auth flow, so the marketing site's
+    // "Create an account" / "Sign in" buttons land where they promise.
+    const wanted = params.get('auth');
+    const role = params.get('role');
+    const deepAuth = wanted === 'signin' || wanted === 'signup';
+    if (deepAuth) {
+      setAuth({ mode: wanted, role: role === 'buyer' || role === 'supplier' ? role : null });
+    }
+
+    if ((nextMode === 'landing' || nextMode === 'app') && !deepAuth) {
       try { setShowSplash(!localStorage.getItem('bb_splash_seen')); } catch { setShowSplash(true); }
     }
   }, []);
@@ -2512,6 +2522,7 @@ function App() {
         <AuthModal
           open={!!auth}
           mode={auth?.mode || 'signin'}
+          role={auth?.role || null}
           onOpenChange={(next) => setAuth(next && next.mode ? next : null)}
           onAuthed={onAuthed}
         />
@@ -2546,6 +2557,7 @@ function App() {
       <AuthModal
         open={!!auth}
         mode={auth?.mode || 'signin'}
+        role={auth?.role || null}
         onOpenChange={(next) => setAuth(next && next.mode ? next : null)}
         onAuthed={onAuthed}
       />

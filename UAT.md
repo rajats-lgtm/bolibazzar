@@ -112,14 +112,17 @@ LAN IP or a public hostname — not `localhost`.
 ## Verifying a deployment
 
 ```bash
-node scripts/smoke.mjs  http://<uat-host>:3000   # 76 end-to-end API assertions
-node scripts/ui-check.mjs http://<uat-host>:3000 # drives the real UI in Chrome
+node scripts/smoke.mjs        http://<uat-host>:3000  # 92 end-to-end API assertions
+node scripts/ui-check.mjs     http://<uat-host>:3000  # drives the real UI in Chrome
+node scripts/landing-check.mjs http://<uat-host>:3002 # the public marketing site
 ```
 
 The smoke test walks the whole journey — OTP login, AI extraction, the live
 auction, payment, orders, delivery, chat, reviews — and asserts every
 authorization rule holds. The UI check drives the same journey in a real
-browser and saves screenshots to `.devdata/screenshots`.
+browser and saves screenshots to `.devdata/screenshots`. The landing check
+covers the marketing site, which deploys separately: the walkthrough
+animation and the links into the app's sign-up fork.
 
 ## Before promoting to production
 

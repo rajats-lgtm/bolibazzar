@@ -77,14 +77,22 @@ LAN IP — update `EXPO_PUBLIC_API_BASE_URL` if your IP changes.
 ## 5. Verify it works
 
 ```bash
-yarn dev                     # in one terminal
-node scripts/smoke.mjs       # 74 end-to-end API assertions
-node scripts/ui-check.mjs    # drives the real UI in Chrome, saves screenshots
+yarn dev                      # in one terminal
+node scripts/smoke.mjs        # 92 end-to-end API assertions
+node scripts/ui-check.mjs     # drives the real UI in Chrome, saves screenshots
+
+yarn landing                  # the marketing site, in another terminal
+node scripts/landing-check.mjs http://localhost:3001
 ```
 
 `smoke.mjs` walks the whole journey — OTP login, AI extraction, the live
 auction, payment, order, delivery, chat, reviews — and asserts every
 authorization rule holds.
+
+`landing-check.mjs` covers the public marketing site, which deploys on its
+own: that the walkthrough animation really advances through its stages, and
+that "Create an account" and "Register your business" link into the matching
+side of the app's sign-up fork.
 
 ## Environment flags
 

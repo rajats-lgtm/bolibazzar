@@ -10,6 +10,9 @@ import { Sparkles, Check, TrendingDown } from 'lucide-react';
  * sellers bid, prices fall, you accept — rather than showing a video, so it
  * stays honest if the product changes and costs nothing to ship.
  *
+ * Kept as a copy rather than an import: this site deploys to the apex domain
+ * independently of the app, exactly like the rest of apps/desktop-landing.
+ *
  * Pauses when scrolled out of view, and respects prefers-reduced-motion by
  * showing the final state instead of animating.
  */
@@ -250,26 +253,26 @@ export default function HowItWorksAnimation() {
               <li
                 key={key}
                 className={`flex gap-3.5 items-start rounded-2xl p-3.5 border transition-colors duration-500 ${
-                  active ? 'border-fuchsia-500/40 bg-fuchsia-500/[0.06]' : 'border-black/10 bg-black/[0.02] dark:border-white/10 dark:bg-white/[0.02]'
+                  active ? 'border-fuchsia-500/40 bg-fuchsia-500/[0.06]' : 'bb-border bb-surface'
                 }`}
               >
                 <span
                   className={`mt-0.5 h-6 w-6 shrink-0 rounded-full grid place-items-center text-[11px] font-semibold transition-colors duration-500 ${
                     active || done || reduced
                       ? 'bg-gradient-to-br from-indigo-600 to-orange-500 text-white'
-                      : 'bg-black/10 text-muted-foreground dark:bg-white/10'
+                      : 'bg-black/10 bb-muted dark:bg-white/10'
                   }`}
                 >
                   {done ? <Check className="w-3 h-3" /> : i + 1}
                 </span>
-                <p className={`text-sm leading-relaxed transition-colors duration-500 ${active || reduced ? 'text-foreground' : 'text-muted-foreground'}`}>
+                <p className={`text-sm leading-relaxed transition-colors duration-500 ${active || reduced ? '' : 'bb-muted'}`}>
                   {captions[key]}
                 </p>
               </li>
             );
           })}
         </ol>
-        <p className="text-xs text-muted-foreground mt-4">
+        <p className="text-xs bb-muted mt-4">
           This is the real flow, not a mock-up — it is what happens when you post a requirement.
         </p>
       </div>

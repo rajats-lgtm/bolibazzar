@@ -182,6 +182,18 @@ try {
   check('supplier console renders', /Supplier console|Supplier dashboard/.test(supplierText), '');
   await page.screenshot({ path: `${shots}/08-supplier.png` });
 
+  console.log('\n\x1b[1mDeep links from the marketing site\x1b[0m');
+  // The marketing site links straight into a role-picked sign-up. If these
+  // params stop being honoured, "Register your business" quietly becomes a
+  // generic landing page and the visitor has to find the flow themselves.
+  await page.goto(BASE + '/?auth=signup&role=supplier', { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await waitFor(page, () => !!document.querySelector('input[type="email"]'), { label: 'supplier sign-up email field' });
+  const deepText = await page.evaluate(() => document.body.innerText);
+  const emailPrompted = await page.evaluate(() => !!document.querySelector('input[type="email"]'));
+  check('?auth=signup opens the sign-up flow', emailPrompted);
+  check('&role=supplier skips the role choice', !/Log in as a buyer|Sign up as a buyer/.test(deepText), '');
+  await page.screenshot({ path: `${shots}/09-deeplink-supplier-signup.png` });
+
   console.log('\n\x1b[1mRuntime errors\x1b[0m');
   check('no client-side errors', errors.length === 0, errors.slice(0, 4).join(' | '));
 } catch (error) {

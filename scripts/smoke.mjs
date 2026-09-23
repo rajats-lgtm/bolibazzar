@@ -270,6 +270,22 @@ check('GST not exposed publicly', store.supplier?.gst === undefined);
 // --- supplier KYC ----------------------------------------------------------
 section('Supplier KYC');
 {
+  // Build a structurally valid GSTIN with a correct check digit, unique per
+  // run, so repeated runs do not collide on the one-GSTIN-per-account rule.
+  const CS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  function makeGstin() {
+    const letters = () => Array.from({ length: 5 }, () => CS[10 + Math.floor(Math.random() * 26)]).join('');
+    const digits = () => Array.from({ length: 4 }, () => CS[Math.floor(Math.random() * 10)]).join('');
+    const prefix = `29${letters()}${digits()}${CS[10 + Math.floor(Math.random() * 26)]}1Z`;
+    let total = 0;
+    for (let i = 0; i < 14; i++) {
+      const product = CS.indexOf(prefix[i]) * (i % 2 === 0 ? 1 : 2);
+      total += Math.floor(product / 36) + (product % 36);
+    }
+    return prefix + CS[(36 - (total % 36)) % 36];
+  }
+  const gstin = makeGstin();
+  const tamperedGstin = gstin.slice(0, 14) + CS[(CS.indexOf(gstin[14]) + 1) % 36];
   const kyc = makeClient('kyc');
   const address = `kyc+${Date.now()}@bolibazzar.test`;
   const ask = await kyc.call('/auth/otp/request', { method: 'POST', body: JSON.stringify({ email: address, role: 'supplier' }) });
@@ -289,15 +305,15 @@ section('Supplier KYC');
   };
 
   // 29AAGCB7383J1Z4 carries a correct check digit; ...1ZZ does not.
-  const tampered = await kyc.call('/suppliers', { method: 'POST', body: JSON.stringify({ ...base, gst: '29AAGCB7383J1ZZ' }) });
+  const tampered = await kyc.call('/suppliers', { method: 'POST', body: JSON.stringify({ ...base, gst: tamperedGstin }) });
   check('GSTIN check digit is enforced', tampered.status === 422 && /check digit/i.test(tampered.fields?.gst || ''), tampered.fields?.gst);
 
-  const badState = await kyc.call('/suppliers', { method: 'POST', body: JSON.stringify({ ...base, gst: '88AAGCB7383J1Z4' }) });
+  const badState = await kyc.call('/suppliers', { method: 'POST', body: JSON.stringify({ ...base, gst: '88' + gstin.slice(2) }) });
   check('invalid state code rejected', badState.status === 422 && /state code/i.test(badState.fields?.gst || ''), badState.fields?.gst);
 
-  const good = await kyc.call('/suppliers', { method: 'POST', body: JSON.stringify({ ...base, gst: '29AAGCB7383J1Z4' }) });
+  const good = await kyc.call('/suppliers', { method: 'POST', body: JSON.stringify({ ...base, gst: gstin }) });
   check('valid registration accepted', good.ok === true, good.error || JSON.stringify(good.fields || {}));
-  check('PAN extracted from the GSTIN', good.supplier?.pan === 'AAGCB7383J', good.supplier?.pan);
+  check('PAN extracted from the GSTIN', good.supplier?.pan === gstin.slice(2, 12), good.supplier?.pan);
   check('marked complete but not yet approved', good.supplier?.profile_complete === true && good.supplier?.status === 'pending_review', good.supplier?.status);
   check('GSTIN not claimed as verified', good.supplier?.gst_verified === false, String(good.supplier?.gst_verified));
 
@@ -306,7 +322,7 @@ section('Supplier KYC');
   const a2 = await other.call('/auth/otp/request', { method: 'POST', body: JSON.stringify({ email: `dupe+${Date.now()}@bolibazzar.test`, role: 'supplier' }) });
   const e2 = a2.destination;
   await other.call('/auth/otp/verify', { method: 'POST', body: JSON.stringify({ email: e2, code: a2.dev_code, role: 'supplier', business_name: 'Dupe Co' }) });
-  const dupe = await other.call('/suppliers', { method: 'POST', body: JSON.stringify({ ...base, business_name: 'Dupe Co', gst: '29AAGCB7383J1Z4' }) });
+  const dupe = await other.call('/suppliers', { method: 'POST', body: JSON.stringify({ ...base, business_name: 'Dupe Co', gst: gstin }) });
   check('a GSTIN cannot be registered twice', dupe.status === 409, `got ${dupe.status}`);
 }
 
@@ -359,12 +375,18 @@ async function bearerCall(path, token, options = {}) {
   });
   return { status: response.status, ok: response.ok, ...(await response.json().catch(() => ({}))) };
 }
-const mobileOtp = await stranger.call('/auth/otp/request', { method: 'POST', body: JSON.stringify({ email: 'buyer@test.in' }) });
-const mobileLogin = await stranger.call('/auth/otp/verify', { method: 'POST', body: JSON.stringify({ email: 'buyer@test.in', code: mobileOtp.dev_code }) });
-check('login returns a bearer token', typeof mobileLogin.token === 'string' && mobileLogin.token.length > 20);
+// A dedicated address: reusing a shared one trips the per-destination OTP
+// throttle when the suite is run repeatedly.
+const mobileEmail = `mobile+${Date.now()}@bolibazzar.test`;
+const mobileOtp = await stranger.call('/auth/otp/request', { method: 'POST', body: JSON.stringify({ email: mobileEmail }) });
+check('login code issued for the mobile actor', !!mobileOtp.dev_code, mobileOtp.error || `status ${mobileOtp.status}`);
+const mobileLogin = await stranger.call('/auth/otp/verify', { method: 'POST', body: JSON.stringify({ email: mobileEmail, code: mobileOtp.dev_code, name: 'Mobile Tester' }) });
+check('login returns a bearer token', typeof mobileLogin.token === 'string' && mobileLogin.token.length > 20, mobileLogin.error);
 
+// Everything below needs a token; bail out cleanly rather than crashing.
+if (typeof mobileLogin.token === 'string') {
 const bearerMe = await bearerCall('/me', mobileLogin.token);
-check('bearer token authenticates', bearerMe.user?.email === 'buyer@test.in', `status ${bearerMe.status}`);
+check('bearer token authenticates', bearerMe.user?.email === mobileEmail, `status ${bearerMe.status}`);
 const bearerOrders = await bearerCall('/orders', mobileLogin.token);
 check('bearer can read orders', Array.isArray(bearerOrders.orders), `status ${bearerOrders.status}`);
 const badBearer = await bearerCall('/me', mobileLogin.token.slice(0, -4) + 'aaaa');
@@ -372,6 +394,7 @@ check('tampered token rejected', badBearer.status === 401, `got ${badBearer.stat
 // A buyer token must never satisfy a supplier-only route.
 const crossRole = await bearerCall('/supplier/rules', mobileLogin.token);
 check('buyer token cannot act as supplier', crossRole.status === 401, `got ${crossRole.status}`);
+}
 
 // --- admin -----------------------------------------------------------------
 section('Admin');

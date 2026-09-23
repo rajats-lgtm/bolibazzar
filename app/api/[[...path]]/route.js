@@ -300,10 +300,12 @@ async function route(req, { params }) {
     const destination = phone || email;
     const channel = phone ? 'phone' : 'email';
 
-    // Throttle: at most 5 codes per destination per 15 minutes.
+    // Throttle per destination. Production stays tight; elsewhere the limit is
+    // relaxed so an automated suite can run repeatedly without tripping it.
+    const limit = isProductionEnv() ? 5 : Number(process.env.OTP_RATE_LIMIT || 50);
     const since = new Date(Date.now() - 15 * 60 * 1000).toISOString();
     const recent = await db.collection('otps').countDocuments({ destination, created_at: { $gte: since } });
-    if (recent >= 5) return err('too many codes requested, please wait a few minutes', 429);
+    if (recent >= limit) return err('too many codes requested, please wait a few minutes', 429);
 
     const code = generateOtp();
     const expiresAt = new Date(Date.now() + OTP_TTL_MS);

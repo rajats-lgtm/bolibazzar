@@ -105,7 +105,15 @@ try {
   check('the signed-in admin is named', home.includes(EMAIL.toLowerCase()), '');
 
   console.log('\n\x1b[1mOverview\x1b[0m');
-  await sleep(1200);
+  // The tiles render `0` until the fetch returns, so wait for real data rather
+  // than sampling at a fixed moment — on a cold dev server the first compile
+  // takes seconds and a fixed sleep reads zeros.
+  await waitFor(
+    page,
+    () => [...document.querySelectorAll('div')]
+      .some((d) => /^\d[\d,]*$/.test(d.textContent.trim()) && Number(d.textContent.trim().replace(/,/g, '')) > 0),
+    { timeout: 25000, label: 'overview metrics' }
+  );
   const overview = await page.evaluate(() => document.body.innerText);
   // The tile labels are uppercased by CSS, so innerText returns them shouting.
   check('metric tiles render', /requests/i.test(overview) && /payment volume/i.test(overview));

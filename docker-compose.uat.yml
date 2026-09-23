@@ -24,6 +24,26 @@ services:
       retries: 10
       start_period: 20s
 
+  # Catches every outbound email locally and shows it in a web inbox, so the
+  # real SMTP code path is exercised without signing up to a provider.
+  mail:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    environment:
+      MP_MAX_MESSAGES: 500
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    ports:
+      - "${MAIL_UI_PORT:-8025}:8025"   # inbox UI
+    expose:
+      - "1025"                          # SMTP
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -qO- http://127.0.0.1:8025/readyz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   api:
     image: bolibazzar/api:uat
     build:
@@ -38,6 +58,8 @@ services:
     restart: unless-stopped
     depends_on:
       mongo:
+        condition: service_healthy
+      mail:
         condition: service_healthy
     environment:
       NODE_ENV: production
@@ -55,6 +77,12 @@ services:
       EMERGENT_LLM_BASE_URL: ${EMERGENT_LLM_BASE_URL:-}
       RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
       RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      # Local mail sink — every code lands in the Mailpit inbox.
+      SMTP_HOST: ${SMTP_HOST:-mail}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_USER: ${SMTP_USER:-uat}
+      SMTP_PASS: ${SMTP_PASS:-uat}
+      MAIL_FROM: ${MAIL_FROM:-BoliBazzar <no-reply@bolibazzar.test>}
       TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
       TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
       WHATSAPP_FROM: ${WHATSAPP_FROM:-}

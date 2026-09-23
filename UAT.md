@@ -30,6 +30,7 @@ it is under a minute.
 | Customer app | `$PUBLIC_BASE_URL/?app` |
 | Marketing site | port `3002` |
 | Admin console | port `3001` |
+| **Mail inbox** | port `8025` — every email the app sends |
 | API health | `$PUBLIC_BASE_URL/api/health` |
 
 ### Test accounts
@@ -43,6 +44,12 @@ it is under a minute.
 Any other email works too — a new account is created on first sign-in. Because
 `OTP_DEV_MODE=true`, the login code appears in the sign-in dialog, so no SMS or
 email provider is required.
+
+The stack also runs **Mailpit**, a local mail sink, so the real email code path
+is exercised rather than stubbed. Every message the app sends — including the
+branded login-code email — lands in the inbox at port `8025`. That means you can
+test and review production email locally, with no provider and no domain. To
+rehearse live delivery, point `SMTP_*` in `.env.uat` at a real server instead.
 
 ## What to test
 

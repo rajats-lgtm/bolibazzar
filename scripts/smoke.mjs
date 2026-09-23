@@ -267,6 +267,45 @@ const store = await stranger.call('/store/supplier@test.in');
 check('storefront is public', !!store.supplier, store.error);
 check('GST not exposed publicly', store.supplier?.gst === undefined);
 
+// --- real email delivery ---------------------------------------------------
+// When a local mail sink is present (the UAT stack runs Mailpit), prove the
+// production email path end to end: a real message is sent, and the code
+// inside it actually signs a user in. Skipped when no sink is reachable.
+section('Email delivery');
+const MAIL_UI = process.env.MAIL_UI || 'http://localhost:8025';
+let mailUp = false;
+try {
+  mailUp = (await fetch(`${MAIL_UI}/api/v1/messages?limit=1`, { signal: AbortSignal.timeout(3000) })).ok;
+} catch { mailUp = false; }
+
+if (!mailUp) {
+  console.log('    (no local mail sink at ' + MAIL_UI + ' — skipping)');
+} else {
+  const address = `smoke+${Date.now()}@bolibazzar.test`;
+  const mailer = makeClient('mailtest');
+  const asked = await mailer.call('/auth/otp/request', { method: 'POST', body: JSON.stringify({ email: address }) });
+  check('login code accepted for delivery', asked.ok === true, asked.error);
+  check('a message was actually sent', !!asked.delivery?.messageId, JSON.stringify(asked.delivery || {}).slice(0, 100));
+
+  await sleep(1500);
+  const inbox = await (await fetch(`${MAIL_UI}/api/v1/search?query=${encodeURIComponent(address)}`)).json();
+  const message = inbox.messages?.[0];
+  check('email arrived in the inbox', !!message, `found ${inbox.messages?.length ?? 0}`);
+
+  if (message) {
+    check('subject carries the code', /\d{6} is your BoliBazzar login code/.test(message.Subject), message.Subject);
+    const full = await (await fetch(`${MAIL_UI}/api/v1/message/${message.ID}`)).json();
+    const emailed = (full.Text || full.HTML || '').match(/\b(\d{6})\b/)?.[1];
+    check('a 6-digit code is in the body', !!emailed, String(emailed));
+
+    const loggedIn = await mailer.call('/auth/otp/verify', {
+      method: 'POST',
+      body: JSON.stringify({ email: address, code: emailed, name: 'Smoke Mail' }),
+    });
+    check('the emailed code signs the user in', loggedIn.ok === true && loggedIn.user?.email === address, loggedIn.error);
+  }
+}
+
 // --- mobile bearer auth ----------------------------------------------------
 // Native apps have no cookie jar; they send the session token as a header.
 section('Mobile bearer auth');

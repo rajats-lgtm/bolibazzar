@@ -15,8 +15,14 @@ import { homeFor, type Role } from '../lib/session';
 export default function Screen() {
   const [role, setRole] = useState<Role | null>(null);
 
-  function finish() {
+  function finish(account: any) {
     // replace, not push: the auth screens must not stay in the back stack.
+    // A supplier who has not submitted business details goes to KYC first —
+    // they cannot trade until an admin has approved the business.
+    if (role === 'supplier' && !account?.profile_complete) {
+      router.replace('/supplier/onboarding' as any);
+      return;
+    }
     router.replace(homeFor(role as Role) as any);
   }
 

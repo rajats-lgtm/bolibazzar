@@ -346,15 +346,23 @@ function NotificationBell({ enabled }) {
 
 // ============ SUPPLIER SIGNUP MODAL ============
 function SupplierSignupModal({ open, onOpenChange, onDone }) {
-  const [f, setF] = useState({ business_name: '', gst: '', email: '', phone: '', city: 'Mumbai', pincode: '', address: '', supplier_type: 'retail_store', brand_authorisations: '' });
+  const [f, setF] = useState({ business_name: '', gst: '', email: '', phone: '', contact_name: '', city: 'Mumbai', pincode: '', address: '', supplier_type: 'retail_store', brand_authorisations: '' });
   const [loading, setLoading] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState({});
   async function submit() {
-    if (!f.business_name || !f.gst || !f.email) return toast.error('Business name, GSTIN and email are required');
     setLoading(true);
+    setFieldErrors({});
     const r = await post('/suppliers', {
       ...f,
       brand_authorisations: f.brand_authorisations.split(',').map(s => s.trim()).filter(Boolean),
     });
+    if (!r.ok && r.fields) {
+      // The server validates the GSTIN structurally; show its reasons inline.
+      setFieldErrors(r.fields);
+      toast.error('Please correct the highlighted details');
+      setLoading(false);
+      return;
+    }
     if (r.ok) {
       // A valid GSTIN format is a sanity check, not verification — an admin
       // still approves the account before it can bid.
@@ -377,10 +385,12 @@ function SupplierSignupModal({ open, onOpenChange, onDone }) {
           <div className="col-span-2">
             <label className="text-xs text-muted-foreground">Business name *</label>
             <Input value={f.business_name} onChange={e => setF({...f, business_name: e.target.value})} placeholder="Croma Retail Pvt Ltd" />
+            {fieldErrors.business_name && <div className="text-xs text-red-400 mt-1">{fieldErrors.business_name}</div>}
           </div>
           <div className="col-span-2">
             <label className="text-xs text-muted-foreground">GSTIN * (15 chars)</label>
             <Input value={f.gst} onChange={e => setF({...f, gst: e.target.value.toUpperCase()})} placeholder="27AAECI1681G1ZP" maxLength={15} />
+            {fieldErrors.gst && <div className="text-xs text-red-400 mt-1">{fieldErrors.gst}</div>}
           </div>
           <div>
             <label className="text-xs text-muted-foreground">Email *</label>
@@ -390,22 +400,30 @@ function SupplierSignupModal({ open, onOpenChange, onDone }) {
             <label className="text-xs text-muted-foreground">Phone</label>
             <Input value={f.phone} onChange={e => setF({...f, phone: e.target.value})} placeholder="+91 98xxxxxxxx" />
           </div>
-          <div>
-            <label className="text-xs text-muted-foreground">City</label>
-            <Input value={f.city} onChange={e => setF({...f, city: e.target.value})} />
+          <div className="col-span-2">
+            <label className="text-xs text-muted-foreground">Contact person *</label>
+            <Input value={f.contact_name} onChange={e => setF({...f, contact_name: e.target.value})} placeholder="Full name" />
+            {fieldErrors.contact_name && <div className="text-xs text-red-400 mt-1">{fieldErrors.contact_name}</div>}
           </div>
           <div>
-            <label className="text-xs text-muted-foreground">Pincode</label>
+            <label className="text-xs text-muted-foreground">City *</label>
+            <Input value={f.city} onChange={e => setF({...f, city: e.target.value})} />
+            {fieldErrors.city && <div className="text-xs text-red-400 mt-1">{fieldErrors.city}</div>}
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground">PIN code *</label>
             <Input value={f.pincode} onChange={e => setF({...f, pincode: e.target.value})} />
+            {fieldErrors.pincode && <div className="text-xs text-red-400 mt-1">{fieldErrors.pincode}</div>}
           </div>
           <div className="col-span-2">
-            <label className="text-xs text-muted-foreground">Store address</label>
+            <label className="text-xs text-muted-foreground">Registered address *</label>
             <Input value={f.address} onChange={e => setF({...f, address: e.target.value})} placeholder="Shop 12, Phoenix Marketcity" />
+            {fieldErrors.address && <div className="text-xs text-red-400 mt-1">{fieldErrors.address}</div>}
           </div>
           <div className="col-span-2">
             <label className="text-xs text-muted-foreground">Supplier type</label>
             <div className="flex gap-2 flex-wrap mt-1">
-              {[['retail_store','Retail store'],['brand_store','Brand store'],['authorised_reseller','Authorised reseller'],['wholesaler','Wholesaler']].map(([v,l]) => (
+              {[['retail_store','Retail store'],['brand_store','Brand store'],['authorised_reseller','Authorised reseller'],['wholesaler','Wholesaler'],['distributor','Distributor']].map(([v,l]) => (
                 <button key={v} onClick={() => setF({...f, supplier_type: v})} className={`px-3 py-1.5 rounded-full text-xs border transition ${f.supplier_type === v ? 'bg-fuchsia-500/20 border-fuchsia-500/50 text-fuchsia-200' : 'border-white/10 hover:border-white/20'}`}>{l}</button>
               ))}
             </div>

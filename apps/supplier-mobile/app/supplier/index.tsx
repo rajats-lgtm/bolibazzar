@@ -74,7 +74,23 @@ export default function SupplierHome() {
           contentContainerStyle={{ padding: 16, paddingTop: 0 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.fuchsia} />}
         >
-          {supplier.status !== 'approved' && (
+          {!supplier.profile_complete && (
+            <TouchableOpacity
+              onPress={() => router.push('/supplier/onboarding')}
+              style={{ backgroundColor: 'rgba(225,29,72,0.08)', borderColor: 'rgba(225,29,72,0.4)', borderWidth: 1, borderRadius: 14, padding: 14, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 10 }}
+            >
+              <Ionicons name="document-text-outline" size={20} color={colors.fuchsia} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.text, fontWeight: '700' }}>Complete your business details</Text>
+                <Text style={{ color: colors.muted, fontSize: 12, marginTop: 3, lineHeight: 17 }}>
+                  We need your GSTIN and registered address before you can bid.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+            </TouchableOpacity>
+          )}
+
+          {supplier.profile_complete && supplier.status !== 'approved' && (
             <View style={{ backgroundColor: 'rgba(245,158,11,0.07)', borderColor: 'rgba(245,158,11,0.35)', borderWidth: 1, borderRadius: 14, padding: 14, marginBottom: 16 }}>
               <Text style={{ color: colors.amber, fontWeight: '700' }}>Awaiting approval</Text>
               <Text style={{ color: colors.muted, fontSize: 12, marginTop: 4, lineHeight: 18 }}>

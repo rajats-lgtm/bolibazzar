@@ -15,6 +15,7 @@ import { computeValueScore, computeTier } from '@/lib/scoring';
 import { advanceAuction, runAutoBidMatching, AUCTION_WINDOW_MS, demoBiddersEnabled } from '@/lib/bidding';
 import { createOrder, trackOrder, setOrderStage, findOrderByOffer, STAGE_KEYS } from '@/lib/orders';
 import { hasMailer } from '@/lib/mailer';
+import { validateSupplierRegistration, SUPPLIER_TYPES } from '@/lib/kyc';
 import {
   hasWhatsApp, sendOtp, addNotification, listNotifications, markNotificationsRead,
   notifySuppliersOfRequest, notifyBuyerOfOffer, notifySupplierOfWin, notifyChatMessage,
@@ -503,26 +504,33 @@ async function route(req, { params }) {
 
   if (path === '/suppliers' && method === 'POST') {
     const body = await readJson(req);
-    const email = normaliseEmail(body.email);
-    if (!body.business_name || !body.gst || !isEmail(email)) {
-      return err('business_name, gst and a valid email are required');
+    // Registering updates whoever is signed in; otherwise the email decides.
+    const email = supplierSession || normaliseEmail(body.email);
+    if (!isEmail(email)) return err('a valid email is required');
+
+    const check = validateSupplierRegistration(body);
+    if (!check.valid) {
+      return err('please correct the highlighted details', 422, { fields: check.errors });
     }
-    const gst = String(body.gst).toUpperCase();
-    const gstValid = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gst);
+
+    // A GSTIN may only be registered to one account.
+    const clash = await db.collection('suppliers').findOne({ gst: check.values.gst, email: { $ne: email } });
+    if (clash) return err('that GSTIN is already registered to another account', 409, { fields: { gst: 'Already registered' } });
+
     const existing = await db.collection('suppliers').findOne({ email });
 
     const fields = {
-      business_name: body.business_name,
-      gst, gst_valid: gstValid,
+      ...check.values,
       phone: normalisePhone(body.phone),
-      address: body.address || '', city: body.city || '', pincode: body.pincode || '',
-      categories: body.categories || ['electronics'],
-      brand_authorisations: body.brand_authorisations || [],
-      supplier_type: body.supplier_type || 'retail_store',
-      // A valid GSTIN format is a sanity check, not a verification. Real
-      // approval is an admin decision.
-      status: existing?.status || 'pending_review',
-      gst_format_ok: gstValid,
+      categories: Array.isArray(body.categories) && body.categories.length ? body.categories : ['electronics'],
+      brand_authorisations: Array.isArray(body.brand_authorisations) ? body.brand_authorisations.slice(0, 30) : [],
+      // The GSTIN is structurally verified, not confirmed against the GST
+      // portal. Approval remains an admin decision.
+      gst_verified: false,
+      gst_structure_ok: true,
+      kyc_submitted_at: new Date().toISOString(),
+      profile_complete: true,
+      status: existing?.status === 'approved' ? 'approved' : 'pending_review',
       updated_at: new Date().toISOString(),
     };
 
@@ -535,7 +543,12 @@ async function route(req, { params }) {
       });
     }
     const supplier = await db.collection('suppliers').findOne({ email }, { projection: { _id: 0 } });
+    await auditAdmin(db, 'supplier_kyc_submitted', null, { email, gst: check.values.gst, business_name: check.values.business_name });
     return attachSession(ok({ supplier }), ROLES.SUPPLIER, email);
+  }
+
+  if (path === '/suppliers/types' && method === 'GET') {
+    return ok({ supplier_types: SUPPLIER_TYPES });
   }
 
   if (path === '/suppliers/me' && method === 'GET') {

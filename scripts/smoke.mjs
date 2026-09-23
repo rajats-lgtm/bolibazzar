@@ -267,6 +267,49 @@ const store = await stranger.call('/store/supplier@test.in');
 check('storefront is public', !!store.supplier, store.error);
 check('GST not exposed publicly', store.supplier?.gst === undefined);
 
+// --- supplier KYC ----------------------------------------------------------
+section('Supplier KYC');
+{
+  const kyc = makeClient('kyc');
+  const address = `kyc+${Date.now()}@bolibazzar.test`;
+  const ask = await kyc.call('/auth/otp/request', { method: 'POST', body: JSON.stringify({ email: address, role: 'supplier' }) });
+  await kyc.call('/auth/otp/verify', { method: 'POST', body: JSON.stringify({ email: address, code: ask.dev_code, role: 'supplier', business_name: 'KYC Test Co' }) });
+
+  const junk = await kyc.call('/suppliers', {
+    method: 'POST',
+    body: JSON.stringify({ business_name: 'X', gst: 'NOPE', contact_name: '', address: 'short', city: '', pincode: '1', supplier_type: 'nope' }),
+  });
+  check('incomplete registration rejected', junk.status === 422, `got ${junk.status}`);
+  check('errors are reported per field', !!junk.fields?.gst && !!junk.fields?.pincode, JSON.stringify(junk.fields || {}).slice(0, 90));
+
+  const base = {
+    business_name: 'KYC Test Co', contact_name: 'Test Contact', phone: '9876543210',
+    address: '14 Residency Road, Ashok Nagar', city: 'Bengaluru', pincode: '560025',
+    supplier_type: 'retail_store',
+  };
+
+  // 29AAGCB7383J1Z4 carries a correct check digit; ...1ZZ does not.
+  const tampered = await kyc.call('/suppliers', { method: 'POST', body: JSON.stringify({ ...base, gst: '29AAGCB7383J1ZZ' }) });
+  check('GSTIN check digit is enforced', tampered.status === 422 && /check digit/i.test(tampered.fields?.gst || ''), tampered.fields?.gst);
+
+  const badState = await kyc.call('/suppliers', { method: 'POST', body: JSON.stringify({ ...base, gst: '88AAGCB7383J1Z4' }) });
+  check('invalid state code rejected', badState.status === 422 && /state code/i.test(badState.fields?.gst || ''), badState.fields?.gst);
+
+  const good = await kyc.call('/suppliers', { method: 'POST', body: JSON.stringify({ ...base, gst: '29AAGCB7383J1Z4' }) });
+  check('valid registration accepted', good.ok === true, good.error || JSON.stringify(good.fields || {}));
+  check('PAN extracted from the GSTIN', good.supplier?.pan === 'AAGCB7383J', good.supplier?.pan);
+  check('marked complete but not yet approved', good.supplier?.profile_complete === true && good.supplier?.status === 'pending_review', good.supplier?.status);
+  check('GSTIN not claimed as verified', good.supplier?.gst_verified === false, String(good.supplier?.gst_verified));
+
+  // A different account must not be able to claim the same GSTIN.
+  const other = makeClient('kyc2');
+  const a2 = await other.call('/auth/otp/request', { method: 'POST', body: JSON.stringify({ email: `dupe+${Date.now()}@bolibazzar.test`, role: 'supplier' }) });
+  const e2 = a2.destination;
+  await other.call('/auth/otp/verify', { method: 'POST', body: JSON.stringify({ email: e2, code: a2.dev_code, role: 'supplier', business_name: 'Dupe Co' }) });
+  const dupe = await other.call('/suppliers', { method: 'POST', body: JSON.stringify({ ...base, business_name: 'Dupe Co', gst: '29AAGCB7383J1Z4' }) });
+  check('a GSTIN cannot be registered twice', dupe.status === 409, `got ${dupe.status}`);
+}
+
 // --- real email delivery ---------------------------------------------------
 // When a local mail sink is present (the UAT stack runs Mailpit), prove the
 // production email path end to end: a real message is sent, and the code

@@ -394,6 +394,33 @@ check('tampered token rejected', badBearer.status === 401, `got ${badBearer.stat
 // A buyer token must never satisfy a supplier-only route.
 const crossRole = await bearerCall('/supplier/rules', mobileLogin.token);
 check('buyer token cannot act as supplier', crossRole.status === 401, `got ${crossRole.status}`);
+
+// The mobile notification feed and chat screens run entirely on bearer auth.
+const bearerFeed = await bearerCall('/notifications', mobileLogin.token);
+check('bearer can read the notification feed', Array.isArray(bearerFeed.notifications) && typeof bearerFeed.unread === 'number', `status ${bearerFeed.status}`);
+const bearerRead = await bearerCall('/notifications/read', mobileLogin.token, { method: 'POST', body: JSON.stringify({ ids: [] }) });
+check('bearer can mark notifications read', bearerRead.ok, `status ${bearerRead.status}`);
+
+// A signed-in outsider is still not a party to someone else's offer, whether
+// they arrive by cookie or by bearer token.
+const outsiderChat = await bearerCall(`/messages/${bid.offer.id}`, mobileLogin.token);
+check('a bearer outsider cannot read a thread', outsiderChat.status === 403, `got ${outsiderChat.status}`);
+}
+
+// Chat over a bearer token, for the buyer who actually owns the offer. The
+// mobile chat screen runs entirely on this path.
+if (typeof login.token === 'string') {
+const bearerChat = await bearerCall('/messages', login.token, {
+  method: 'POST',
+  body: JSON.stringify({ offer_id: bid.offer.id, text: 'Sent from the mobile app.' }),
+});
+check('bearer can post to its own chat thread', bearerChat.ok && bearerChat.message?.sender === 'buyer', bearerChat.error || `status ${bearerChat.status}`);
+const bearerThread = await bearerCall(`/messages/${bid.offer.id}`, login.token);
+check('bearer can read the thread back', (bearerThread.messages || []).some((m) => m.text === 'Sent from the mobile app.'), `status ${bearerThread.status}`);
+// The chat screen only asks for what it has not seen; a future cursor must
+// come back empty rather than replaying the thread.
+const bearerSince = await bearerCall(`/messages/${bid.offer.id}?since=${encodeURIComponent(new Date(Date.now() + 60000).toISOString())}`, login.token);
+check('since= returns only newer messages', (bearerSince.messages || []).length === 0, String(bearerSince.messages?.length));
 }
 
 // --- admin -----------------------------------------------------------------

@@ -125,6 +125,17 @@ export default function Orders() {
                 </Text>
               )}
               <Tracker offerId={o.offer_id} />
+
+              <TouchableOpacity
+                onPress={() => router.push({ pathname: '/chat', params: { offerId: o.offer_id, title: o.supplier_name } })}
+                style={{
+                  marginTop: 12, borderWidth: 1, borderColor: colors.border, borderRadius: 12,
+                  paddingVertical: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+                }}
+              >
+                <Ionicons name="chatbubble-outline" size={15} color={colors.text} />
+                <Text style={{ color: colors.text, fontWeight: '600', fontSize: 13 }}>Message {o.supplier_name}</Text>
+              </TouchableOpacity>
             </View>
           ))
         )}

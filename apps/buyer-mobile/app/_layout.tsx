@@ -9,6 +9,8 @@ import { colors } from '../lib/theme';
  *   /signin, /signup   pick buyer or supplier, then verify by code
  *   /buyer/*           buyer side
  *   /supplier/*        supplier side
+ *   /chat              one offer's buyer-supplier thread, used by both sides
+ *   /notifications     in-app feed, used by both sides
  */
 export default function RootLayout() {
   return (
@@ -27,6 +29,9 @@ export default function RootLayout() {
         {/* Entering a role replaces the stack, so back never returns to auth. */}
         <Stack.Screen name="buyer/index" options={{ gestureEnabled: false }} />
         <Stack.Screen name="supplier/index" options={{ gestureEnabled: false }} />
+        {/* Shared by both roles; the server decides who the viewer is. */}
+        <Stack.Screen name="chat" />
+        <Stack.Screen name="notifications" />
       </Stack>
     </GestureHandlerRootView>
   );

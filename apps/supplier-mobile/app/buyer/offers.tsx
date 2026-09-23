@@ -230,21 +230,35 @@ export default function Offers() {
                 <Text style={{ color: colors.muted, fontSize: 11, marginTop: 6 }}>Why: {o.rationale}</Text>
               )}
 
-              <TouchableOpacity
-                onPress={() => accept(o)}
-                disabled={closed || paying === o.id}
-                style={{ borderRadius: 12, overflow: 'hidden', marginTop: 12, opacity: closed ? 0.5 : 1 }}
-              >
-                <LinearGradient colors={[colors.indigo, colors.orange]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={{ padding: 12, alignItems: 'center' }}>
-                  {paying === o.id ? (
-                    <ActivityIndicator color="white" />
-                  ) : (
-                    <Text style={{ color: 'white', fontWeight: '700' }}>
-                      {o.status === 'accepted' ? 'Accepted' : o.status === 'rejected' ? 'Closed' : 'Accept & Pay'}
-                    </Text>
-                  )}
-                </LinearGradient>
-              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+                {/* Ask before you commit — stock, warranty, or a better price. */}
+                <TouchableOpacity
+                  onPress={() => router.push({ pathname: '/chat', params: { offerId: o.id, title: o.supplier_name } })}
+                  style={{
+                    borderRadius: 12, borderWidth: 1, borderColor: colors.border,
+                    paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6,
+                  }}
+                >
+                  <Ionicons name="chatbubble-outline" size={15} color={colors.text} />
+                  <Text style={{ color: colors.text, fontWeight: '600', fontSize: 13 }}>Chat</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => accept(o)}
+                  disabled={closed || paying === o.id}
+                  style={{ flex: 1, borderRadius: 12, overflow: 'hidden', opacity: closed ? 0.5 : 1 }}
+                >
+                  <LinearGradient colors={[colors.indigo, colors.orange]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={{ padding: 12, alignItems: 'center' }}>
+                    {paying === o.id ? (
+                      <ActivityIndicator color="white" />
+                    ) : (
+                      <Text style={{ color: 'white', fontWeight: '700' }}>
+                        {o.status === 'accepted' ? 'Accepted' : o.status === 'rejected' ? 'Closed' : 'Accept & Pay'}
+                      </Text>
+                    )}
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
             </View>
           );
         })}

@@ -89,6 +89,17 @@ export default function Orders() {
                   {LABELS[o.stage] || o.stage}
                 </Text>
 
+                <TouchableOpacity
+                  onPress={() => router.push({ pathname: '/chat', params: { offerId: o.offer_id, title: o.buyer_name || 'Buyer' } })}
+                  style={{
+                    marginTop: 14, borderWidth: 1, borderColor: colors.border, borderRadius: 12,
+                    paddingVertical: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+                  }}
+                >
+                  <Ionicons name="chatbubble-outline" size={15} color={colors.text} />
+                  <Text style={{ color: colors.text, fontWeight: '600', fontSize: 13 }}>Message the buyer</Text>
+                </TouchableOpacity>
+
                 {next && (
                   <TouchableOpacity
                     onPress={() => advance(o)}

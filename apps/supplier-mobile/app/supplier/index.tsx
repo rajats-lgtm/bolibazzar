@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Logo from '../../components/Logo';
+import NotificationBell from '../../components/NotificationBell';
 import { api, formatINR } from '../../lib/api';
 import { colors } from '../../lib/theme';
 
@@ -45,6 +46,7 @@ export default function SupplierHome() {
           <TouchableOpacity onPress={() => router.push('/supplier/analytics')} style={{ padding: 8 }}>
             <Ionicons name="stats-chart" size={22} color={colors.text} />
           </TouchableOpacity>
+          <NotificationBell />
           <TouchableOpacity onPress={() => router.push('/supplier/profile')} style={{ padding: 8 }}>
             <Ionicons name="person-circle-outline" size={26} color={colors.text} />
           </TouchableOpacity>

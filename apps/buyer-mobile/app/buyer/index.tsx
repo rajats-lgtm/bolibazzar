@@ -6,6 +6,7 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Speech from 'expo-speech';
 import Logo from '../../components/Logo';
+import NotificationBell from '../../components/NotificationBell';
 import { api, post, formatINR } from '../../lib/api';
 import { colors } from '../../lib/theme';
 
@@ -43,9 +44,12 @@ export default function Home() {
             Boli<Text style={{ color: colors.fuchsia }}>Bazzar</Text>
           </Text>
         </View>
-        <TouchableOpacity onPress={() => router.push('/buyer/profile')} style={{ padding: 8 }}>
-          <Ionicons name="person-circle-outline" size={28} color={colors.text} />
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+          <NotificationBell />
+          <TouchableOpacity onPress={() => router.push('/buyer/profile')} style={{ padding: 8 }}>
+            <Ionicons name="person-circle-outline" size={28} color={colors.text} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 20, paddingTop: 40 }}>

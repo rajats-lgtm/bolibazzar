@@ -3,8 +3,8 @@ import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from 'rea
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { api, formatINR } from '../lib/api';
-import { colors } from '../lib/theme';
+import { api, formatINR } from '../../lib/api';
+import { colors } from '../../lib/theme';
 
 function Stat({ label, value, tone }: { label: string; value: string | number; tone?: string }) {
   return (

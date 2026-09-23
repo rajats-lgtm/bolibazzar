@@ -4,8 +4,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { api, post, formatINR } from '../lib/api';
-import { colors } from '../lib/theme';
+import { api, post, formatINR } from '../../lib/api';
+import { colors } from '../../lib/theme';
 
 /**
  * Live auction board.
@@ -75,7 +75,7 @@ export default function Offers() {
     if (!session.buyer) {
       Alert.alert('Sign in required', 'Sign in to complete your purchase.', [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Sign in', onPress: () => router.push('/profile') },
+        { text: 'Sign in', onPress: () => router.push('/buyer/profile') },
       ]);
       return;
     }
@@ -105,7 +105,7 @@ export default function Offers() {
           setPaying(null);
           if (accepted.ok) {
             Alert.alert('Order confirmed', 'Your order is placed. Track it from the Orders screen.', [
-              { text: 'View orders', onPress: () => router.push('/orders') },
+              { text: 'View orders', onPress: () => router.push('/buyer/orders') },
               { text: 'OK' },
             ]);
             poll();

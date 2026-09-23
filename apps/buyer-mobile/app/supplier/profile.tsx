@@ -3,12 +3,11 @@ import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from 'rea
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { api, setToken } from '../lib/api';
-import { colors } from '../lib/theme';
-import { registerPush } from '../lib/push';
-import OtpLogin from '../components/OtpLogin';
+import { api } from '../../lib/api';
+import { clearSession } from '../../lib/session';
+import { colors } from '../../lib/theme';
 
-export default function Profile() {
+export default function SupplierProfile() {
   const [supplier, setSupplier] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
@@ -20,15 +19,10 @@ export default function Profile() {
 
   useFocusEffect(useCallback(() => { setLoading(true); load(); }, [load]));
 
-  async function onSignedIn(account: any) {
-    setSupplier(account);
-    registerPush().catch(() => null);
-  }
-
   async function signOut() {
     await api('/auth/session', { method: 'DELETE', body: JSON.stringify({ role: 'supplier' }) });
-    await setToken(null);
-    setSupplier(null);
+    await clearSession();
+    router.replace('/');
   }
 
   const statusColour =
@@ -47,22 +41,20 @@ export default function Profile() {
       <ScrollView contentContainerStyle={{ padding: 16 }}>
         {loading ? (
           <ActivityIndicator color={colors.fuchsia} style={{ marginTop: 40 }} />
-        ) : !supplier ? (
-          <OtpLogin role="supplier" onSignedIn={onSignedIn} />
         ) : (
           <View>
-            <Text style={{ color: colors.text, fontSize: 26, fontWeight: '800' }}>{supplier.business_name}</Text>
-            <Text style={{ color: colors.muted, marginTop: 4 }}>{supplier.email}</Text>
-            {!!supplier.city && <Text style={{ color: colors.muted, marginTop: 2 }}>{supplier.city}</Text>}
+            <Text style={{ color: colors.text, fontSize: 26, fontWeight: '800' }}>{supplier?.business_name}</Text>
+            <Text style={{ color: colors.muted, marginTop: 4 }}>{supplier?.email}</Text>
+            {!!supplier?.city && <Text style={{ color: colors.muted, marginTop: 2 }}>{supplier.city}</Text>}
 
             <View style={{ marginTop: 18, borderColor: colors.border, borderWidth: 1, borderRadius: 16, padding: 16 }}>
-              <Text style={{ color: colors.muted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 1 }}>Account status</Text>
+              <Text style={{ color: colors.muted, fontSize: 11, letterSpacing: 1 }}>ACCOUNT STATUS</Text>
               <Text style={{ color: statusColour, fontSize: 18, fontWeight: '700', marginTop: 4, textTransform: 'capitalize' }}>
-                {String(supplier.status || '').replace(/_/g, ' ')}
+                {String(supplier?.status || '').replace(/_/g, ' ')}
               </Text>
-              {supplier.status !== 'approved' && (
+              {supplier?.status !== 'approved' && (
                 <Text style={{ color: colors.muted, fontSize: 12, marginTop: 6, lineHeight: 18 }}>
-                  You can see live requests, but bidding unlocks once an admin approves your business.
+                  You can browse live requests, but bidding unlocks once an admin approves your business.
                 </Text>
               )}
             </View>
@@ -70,19 +62,15 @@ export default function Profile() {
             <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
               <View style={{ flex: 1, borderColor: colors.border, borderWidth: 1, borderRadius: 14, padding: 14 }}>
                 <Text style={{ color: colors.muted, fontSize: 11 }}>Rating</Text>
-                <Text style={{ color: colors.text, fontSize: 20, fontWeight: '700' }}>★ {supplier.rating}</Text>
+                <Text style={{ color: colors.text, fontSize: 20, fontWeight: '700' }}>★ {supplier?.rating}</Text>
               </View>
               <View style={{ flex: 1, borderColor: colors.border, borderWidth: 1, borderRadius: 14, padding: 14 }}>
                 <Text style={{ color: colors.muted, fontSize: 11 }}>Reviews</Text>
-                <Text style={{ color: colors.text, fontSize: 20, fontWeight: '700' }}>{supplier.reviews}</Text>
+                <Text style={{ color: colors.text, fontSize: 20, fontWeight: '700' }}>{supplier?.reviews}</Text>
               </View>
             </View>
 
-            {[
-              ['Analytics', '/analytics'],
-              ['Auto-bid rules', '/rules'],
-              ['Orders to fulfil', '/orders'],
-            ].map(([label, path]) => (
+            {([['Analytics', '/supplier/analytics'], ['Auto-bid rules', '/supplier/rules'], ['Orders to fulfil', '/supplier/orders']] as const).map(([label, path]) => (
               <TouchableOpacity
                 key={path}
                 onPress={() => router.push(path as any)}

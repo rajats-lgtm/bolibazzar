@@ -4,8 +4,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { api, post, formatINR } from '../lib/api';
-import { colors } from '../lib/theme';
+import { api, post, formatINR } from '../../lib/api';
+import { colors } from '../../lib/theme';
 
 export default function Request() {
   const { id } = useLocalSearchParams<{ id: string }>();

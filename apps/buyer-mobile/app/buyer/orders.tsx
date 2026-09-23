@@ -3,8 +3,8 @@ import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, RefreshCon
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { api, formatINR } from '../lib/api';
-import { colors } from '../lib/theme';
+import { api, formatINR } from '../../lib/api';
+import { colors } from '../../lib/theme';
 
 const STAGES = [
   { key: 'confirmed', label: 'Confirmed' },
@@ -73,7 +73,7 @@ export default function Orders() {
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
-    const r = await api('/orders');
+    const r = await api('/buyer/orders');
     if (r.status === 401) { setSignedIn(false); setLoading(false); return; }
     setSignedIn(true);
     if (r.ok) setOrders(r.orders || []);
@@ -101,7 +101,7 @@ export default function Orders() {
         ) : !signedIn ? (
           <View style={{ alignItems: 'center', marginTop: 40 }}>
             <Text style={{ color: colors.muted, textAlign: 'center' }}>Sign in to see your orders.</Text>
-            <TouchableOpacity onPress={() => router.push('/profile')} style={{ marginTop: 16, paddingVertical: 12, paddingHorizontal: 24, borderRadius: 12, borderColor: colors.border, borderWidth: 1 }}>
+            <TouchableOpacity onPress={() => router.push('/buyer/profile')} style={{ marginTop: 16, paddingVertical: 12, paddingHorizontal: 24, borderRadius: 12, borderColor: colors.border, borderWidth: 1 }}>
               <Text style={{ color: colors.text }}>Go to profile</Text>
             </TouchableOpacity>
           </View>

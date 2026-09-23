@@ -1,104 +1,109 @@
-import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { useCallback, useState } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
+import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as Speech from 'expo-speech';
 import Logo from '../components/Logo';
-import { api, post, formatINR } from '../lib/api';
 import { colors } from '../lib/theme';
+import { getSession, homeFor } from '../lib/session';
 
-const EXAMPLES = [
-  'iPhone 17 Pro Max 256GB Black under ₹1,20,000',
-  'MacBook Air M5 16GB under ₹95,000 in Bengaluru',
-  'Samsung OLED 55-inch TV under ₹80,000 same-day',
-  'PS6 with one controller under ₹55,000 Mumbai',
-];
+/**
+ * Landing screen — the first thing anyone sees.
+ *
+ * Mirrors the desktop landing page: the pitch, how it works, and the two ways
+ * in. Someone already signed in is sent straight to their side of the app.
+ */
 
-export default function Home() {
-  const [text, setText] = useState('');
-  const [loading, setLoading] = useState(false);
+const STEPS = [
+  { icon: 'sparkles-outline', title: 'Tell AI what you want', body: 'Type or speak it in English, Hindi, Tamil or Marathi.' },
+  { icon: 'notifications-outline', title: 'Verified sellers are notified', body: 'Only matching, GST-registered suppliers. No spam.' },
+  { icon: 'trending-down-outline', title: 'They compete live', body: 'Prices drop in real time as sellers bid to win you.' },
+  { icon: 'bag-check-outline', title: 'Chat, pay, track', body: 'Negotiate, pay by UPI, follow it to your door.' },
+] as const;
 
-  async function submit() {
-    if (!text.trim()) return;
-    setLoading(true);
-    const r = await post('/extract', { text });
-    setLoading(false);
-    if (!r.ok) { Alert.alert('AI failed', r.error || 'Try again'); return; }
-    // Speak the summary
-    if (r.requirement?.summary) {
-      const lang = r.requirement.detected_language === 'hi' ? 'hi-IN' : 'en-IN';
-      Speech.speak(r.requirement.summary, { language: lang });
-    }
-    router.push({ pathname: '/offers', params: { req: JSON.stringify(r.requirement), raw: text } });
+export default function Landing() {
+  const [checking, setChecking] = useState(true);
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      (async () => {
+        const session = await getSession();
+        if (!active) return;
+        if (session) router.replace(homeFor(session.role) as any);
+        else setChecking(false);
+      })();
+      return () => { active = false; };
+    }, [])
+  );
+
+  if (checking) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg, justifyContent: 'center', alignItems: 'center' }}>
+        <Logo size={56} />
+        <ActivityIndicator color={colors.fuchsia} style={{ marginTop: 20 }} />
+      </SafeAreaView>
+    );
   }
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
-      <View style={{ padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <Logo size={32} />
-          <Text style={{ color: colors.text, fontWeight: '700', fontSize: 18 }}>
+      <ScrollView contentContainerStyle={{ padding: 24, paddingBottom: 40 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 8 }}>
+          <Logo size={38} />
+          <Text style={{ color: colors.text, fontWeight: '800', fontSize: 20 }}>
             Boli<Text style={{ color: colors.fuchsia }}>Bazzar</Text>
           </Text>
         </View>
-        <TouchableOpacity onPress={() => router.push('/profile')} style={{ padding: 8 }}>
-          <Ionicons name="person-circle-outline" size={28} color={colors.text} />
-        </TouchableOpacity>
-      </View>
 
-      <ScrollView contentContainerStyle={{ padding: 20, paddingTop: 40 }}>
-        <Text style={{ color: colors.muted, fontSize: 13, marginBottom: 8 }}>India's AI Reverse Marketplace</Text>
-        <Text style={{ color: colors.text, fontSize: 34, fontWeight: '800', lineHeight: 40 }}>
+        <Text style={{ color: colors.muted, fontSize: 13, marginTop: 36, letterSpacing: 0.5 }}>
+          INDIA&apos;S AI REVERSE MARKETPLACE
+        </Text>
+        <Text style={{ color: colors.text, fontSize: 38, fontWeight: '800', lineHeight: 46, marginTop: 10 }}>
           You Ask.{'\n'}
           <Text style={{ color: colors.fuchsia }}>Sellers Compete.</Text>{'\n'}
           You Win.
         </Text>
-        <Text style={{ color: colors.muted, fontSize: 15, marginTop: 14, lineHeight: 22 }}>
-          Speak or type in English, Hindi, Tamil or Marathi. Our AI understands, verified suppliers bid live.
+        <Text style={{ color: colors.muted, fontSize: 15, marginTop: 16, lineHeight: 23 }}>
+          Stop scrolling through listings. Say what you want to buy — verified suppliers
+          across India bid against each other, and you pick the winner.
         </Text>
 
-        <View style={{ backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1, borderRadius: 20, padding: 16, marginTop: 24 }}>
-          <TextInput
-            value={text}
-            onChangeText={setText}
-            placeholder="What would you like to buy today?"
-            placeholderTextColor={colors.muted}
-            multiline
-            style={{ color: colors.text, fontSize: 16, minHeight: 60 }}
-          />
-          <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
-            <TouchableOpacity style={{ backgroundColor: 'rgba(255,255,255,0.08)', padding: 12, borderRadius: 14 }} onPress={() => Alert.alert('Voice', 'Long-press to speak (implement expo-speech-recognition)')}>
-              <Ionicons name="mic" size={20} color={colors.text} />
-            </TouchableOpacity>
-            <TouchableOpacity disabled={loading || !text.trim()} onPress={submit} style={{ flex: 1, borderRadius: 14, overflow: 'hidden', opacity: loading || !text.trim() ? 0.5 : 1 }}>
-              <LinearGradient colors={[colors.indigo, colors.orange]} start={{x:0,y:0}} end={{x:1,y:1}} style={{ padding: 12, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 }}>
-                {loading ? <ActivityIndicator color="white" /> : <Ionicons name="send" size={18} color="white" />}
-                <Text style={{ color: 'white', fontWeight: '600' }}>Ask AI</Text>
-              </LinearGradient>
-            </TouchableOpacity>
-          </View>
-        </View>
+        <TouchableOpacity onPress={() => router.push('/signup')} style={{ borderRadius: 14, overflow: 'hidden', marginTop: 32 }}>
+          <LinearGradient colors={[colors.indigo, colors.orange]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={{ padding: 17, alignItems: 'center' }}>
+            <Text style={{ color: 'white', fontWeight: '700', fontSize: 16 }}>Create an account</Text>
+          </LinearGradient>
+        </TouchableOpacity>
 
-        <View style={{ marginTop: 20 }}>
-          <Text style={{ color: colors.muted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>Try one of these</Text>
-          {EXAMPLES.map((ex) => (
-            <TouchableOpacity key={ex} onPress={() => setText(ex)} style={{ backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1, borderRadius: 14, padding: 12, marginBottom: 8 }}>
-              <Text style={{ color: colors.text, fontSize: 14 }}>{ex}</Text>
-            </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => router.push('/signin')}
+          style={{ marginTop: 12, padding: 17, borderRadius: 14, borderWidth: 1, borderColor: colors.border, alignItems: 'center' }}
+        >
+          <Text style={{ color: colors.text, fontWeight: '600', fontSize: 16 }}>Sign in</Text>
+        </TouchableOpacity>
+
+        <View style={{ marginTop: 44 }}>
+          <Text style={{ color: colors.text, fontWeight: '700', fontSize: 18, marginBottom: 18 }}>How it works</Text>
+          {STEPS.map((step, i) => (
+            <View key={step.title} style={{ flexDirection: 'row', gap: 14, marginBottom: 20 }}>
+              <View style={{ width: 42, height: 42, borderRadius: 12, backgroundColor: 'rgba(225,29,72,0.10)', borderColor: colors.border, borderWidth: 1, alignItems: 'center', justifyContent: 'center' }}>
+                <Ionicons name={step.icon as any} size={19} color={colors.fuchsia} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.muted, fontSize: 11, letterSpacing: 0.8 }}>STEP {i + 1}</Text>
+                <Text style={{ color: colors.text, fontWeight: '600', fontSize: 15, marginTop: 2 }}>{step.title}</Text>
+                <Text style={{ color: colors.muted, fontSize: 13, marginTop: 3, lineHeight: 19 }}>{step.body}</Text>
+              </View>
+            </View>
           ))}
         </View>
 
-        <View style={{ flexDirection: 'row', gap: 8, marginTop: 24 }}>
-          <TouchableOpacity onPress={() => router.push('/profile')} style={{ flex: 1, backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1, borderRadius: 14, padding: 14, alignItems: 'center' }}>
-            <Ionicons name="wallet" size={20} color={colors.emerald} />
-            <Text style={{ color: colors.text, marginTop: 6, fontWeight: '500' }}>Wallet</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => router.push('/profile')} style={{ flex: 1, backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1, borderRadius: 14, padding: 14, alignItems: 'center' }}>
-            <Ionicons name="clipboard" size={20} color={colors.fuchsia} />
-            <Text style={{ color: colors.text, marginTop: 6, fontWeight: '500' }}>My requests</Text>
-          </TouchableOpacity>
+        <View style={{ marginTop: 16, borderTopColor: colors.border, borderTopWidth: 1, paddingTop: 20 }}>
+          <Text style={{ color: colors.muted, fontSize: 12, textAlign: 'center', lineHeight: 18 }}>
+            Selling on BoliBazzar? Create a supplier account to get live buyer
+            requests with real budgets.
+          </Text>
         </View>
       </ScrollView>
     </SafeAreaView>

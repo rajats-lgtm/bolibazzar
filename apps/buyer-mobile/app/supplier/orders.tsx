@@ -3,8 +3,8 @@ import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, RefreshCon
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { api, post, formatINR } from '../lib/api';
-import { colors } from '../lib/theme';
+import { api, post, formatINR } from '../../lib/api';
+import { colors } from '../../lib/theme';
 
 const STAGES = ['confirmed', 'packed', 'shipped', 'out_for_delivery', 'delivered'];
 const LABELS: Record<string, string> = {
@@ -20,7 +20,7 @@ export default function Orders() {
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const r = await api('/orders');
+    const r = await api('/supplier/orders');
     if (r.status === 401) { setSignedIn(false); setLoading(false); setRefreshing(false); return; }
     setSignedIn(true);
     if (r.ok) setOrders(r.orders || []);

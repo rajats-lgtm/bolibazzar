@@ -3,24 +3,18 @@ import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from 'rea
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { api, formatINR, setToken } from '../lib/api';
-import { colors } from '../lib/theme';
-import { registerPush } from '../lib/push';
-import OtpLogin from '../components/OtpLogin';
+import { api, formatINR } from '../../lib/api';
+import { clearSession } from '../../lib/session';
+import { colors } from '../../lib/theme';
 
-export default function Profile() {
+export default function BuyerProfile() {
   const [user, setUser] = useState<any>(null);
   const [wallet, setWallet] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     const session = await api('/auth/session');
-    if (!session.ok || !session.buyer) {
-      setUser(null);
-      setWallet(null);
-      setLoading(false);
-      return;
-    }
+    if (!session.ok || !session.buyer) { setLoading(false); return; }
     setUser(session.buyer);
     const w = await api('/wallet');
     if (w.ok) setWallet(w.wallet);
@@ -29,17 +23,10 @@ export default function Profile() {
 
   useFocusEffect(useCallback(() => { setLoading(true); load(); }, [load]));
 
-  async function onSignedIn(account: any) {
-    setUser(account);
-    load();
-    registerPush().catch(() => null);
-  }
-
   async function signOut() {
     await api('/auth/session', { method: 'DELETE', body: JSON.stringify({ role: 'buyer' }) });
-    await setToken(null);
-    setUser(null);
-    setWallet(null);
+    await clearSession();
+    router.replace('/');
   }
 
   return (
@@ -54,18 +41,16 @@ export default function Profile() {
       <ScrollView contentContainerStyle={{ padding: 16 }}>
         {loading ? (
           <ActivityIndicator color={colors.fuchsia} style={{ marginTop: 40 }} />
-        ) : !user ? (
-          <OtpLogin role="buyer" onSignedIn={onSignedIn} />
         ) : (
           <View>
             <Text style={{ color: colors.text, fontSize: 26, fontWeight: '800' }}>
-              Hi {String(user.name || '').split(' ')[0] || 'there'}
+              Hi {String(user?.name || '').split(' ')[0] || 'there'}
             </Text>
-            <Text style={{ color: colors.muted, marginTop: 4 }}>{user.email}</Text>
+            <Text style={{ color: colors.muted, marginTop: 4 }}>{user?.email}</Text>
 
-            {user.tier && (
+            {user?.tier && (
               <View style={{ marginTop: 16, backgroundColor: 'rgba(251,191,36,0.08)', borderColor: 'rgba(251,191,36,0.3)', borderWidth: 1, borderRadius: 16, padding: 16 }}>
-                <Text style={{ color: colors.muted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 1 }}>Loyalty tier</Text>
+                <Text style={{ color: colors.muted, fontSize: 11, letterSpacing: 1 }}>LOYALTY TIER</Text>
                 <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700', marginTop: 2 }}>{user.tier.label}</Text>
                 <Text style={{ color: colors.muted, fontSize: 12, marginTop: 4 }}>
                   {user.tier.cashback_pct}% cashback on every purchase
@@ -84,7 +69,7 @@ export default function Profile() {
             )}
 
             <View style={{ marginTop: 16, backgroundColor: 'rgba(16,185,129,0.08)', borderColor: 'rgba(16,185,129,0.3)', borderWidth: 1, borderRadius: 16, padding: 16 }}>
-              <Text style={{ color: colors.muted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 1 }}>Wallet</Text>
+              <Text style={{ color: colors.muted, fontSize: 11, letterSpacing: 1 }}>WALLET</Text>
               <Text style={{ color: colors.text, fontSize: 30, fontWeight: '800', marginTop: 2 }}>
                 {formatINR(wallet?.balance_inr || 0)}
               </Text>
@@ -98,9 +83,7 @@ export default function Profile() {
                   <View key={t.id} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 10, borderBottomColor: colors.border, borderBottomWidth: 1 }}>
                     <View style={{ flex: 1, paddingRight: 12 }}>
                       <Text style={{ color: colors.text, fontSize: 13 }}>{t.reason}</Text>
-                      <Text style={{ color: colors.muted, fontSize: 11, marginTop: 2 }}>
-                        {new Date(t.at).toLocaleDateString('en-IN')}
-                      </Text>
+                      <Text style={{ color: colors.muted, fontSize: 11, marginTop: 2 }}>{new Date(t.at).toLocaleDateString('en-IN')}</Text>
                     </View>
                     <Text style={{ color: t.type === 'credit' ? colors.emerald : colors.muted, fontWeight: '700' }}>
                       {t.type === 'credit' ? '+' : '−'}{formatINR(t.amount)}
@@ -111,7 +94,7 @@ export default function Profile() {
             )}
 
             <TouchableOpacity
-              onPress={() => router.push('/orders')}
+              onPress={() => router.push('/buyer/orders')}
               style={{ marginTop: 20, padding: 15, borderColor: colors.border, borderWidth: 1, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
             >
               <Text style={{ color: colors.text, fontWeight: '600' }}>My orders</Text>

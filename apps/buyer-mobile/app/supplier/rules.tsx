@@ -3,8 +3,8 @@ import { View, Text, ScrollView, TouchableOpacity, TextInput, Alert, ActivityInd
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { api, post } from '../lib/api';
-import { colors } from '../lib/theme';
+import { api, post } from '../../lib/api';
+import { colors } from '../../lib/theme';
 
 const CATEGORIES = ['any', 'smartphone', 'laptop', 'tablet', 'tv', 'headphones'];
 

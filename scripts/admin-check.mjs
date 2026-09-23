@@ -67,20 +67,29 @@ page.on('console', (m) => {
   if (m.type() === 'error' && !expected403 && !/favicon|React DevTools/i.test(text)) errors.push('console: ' + text);
 });
 
-/** Type into a field, going through React's value setter. */
+/**
+ * Type into a field, going through React's value setter.
+ * Returns false rather than throwing when the field is not there, so a missing
+ * input is reported as a failed assertion instead of an opaque
+ * "Illegal invocation" from calling the setter on null.
+ */
 async function fill(selector, value) {
-  await page.evaluate((sel, val) => {
+  return page.evaluate((sel, val) => {
     const input = document.querySelector(sel);
+    if (!input) return false;
     const proto = input instanceof window.HTMLTextAreaElement ? window.HTMLTextAreaElement : window.HTMLInputElement;
     Object.getOwnPropertyDescriptor(proto.prototype, 'value').set.call(input, val);
     input.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
   }, selector, value);
 }
 
 try {
   console.log('\n\x1b[1mLogin gate\x1b[0m');
-  await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await waitFor(page, () => /control room/i.test(document.body.innerText), { label: 'login form' });
+  // A dev server compiles this route on first hit, which on a loaded machine
+  // can take well over the default timeout — wait generously here only.
+  await page.goto(BASE + '/', { waitUntil: 'networkidle2', timeout: 90000 });
+  await waitFor(page, () => /control room/i.test(document.body.innerText), { timeout: 60000, label: 'login form' });
   const gate = await page.evaluate(() => document.body.innerText);
   check('login form renders', /control room/i.test(gate));
   check('console is not shown before sign-in', !/Lock console/.test(gate));
@@ -126,7 +135,7 @@ try {
   await page.screenshot({ path: `${shots}/admin-02-overview.png` });
 
   console.log('\n\x1b[1mEvery tab loads\x1b[0m');
-  const tabs = ['Customers', 'Suppliers', 'Requests', 'Offers', 'Payments', 'Reviews', 'Messages', 'Audit', 'Settings'];
+  const tabs = ['Customers', 'Sellers', 'Requests', 'Offers', 'Orders', 'Payments', 'Reviews', 'Messages', 'Broadcast', 'Audit', 'Settings'];
   for (const label of tabs) {
     const clicked = await page.evaluate((name) => {
       const button = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === name);
@@ -138,14 +147,117 @@ try {
     const text = await page.evaluate(() => document.body.innerText);
     const broke = /Could not load/i.test(text);
     // Every tab renders a Panel whose heading ends in "management", or one of
-    // the three named panels.
-    const rendered = /management|audit trail|platform settings|watchlist/i.test(text);
+    // the named panels.
+    const rendered = /management|audit trail|watchlist|send an announcement|auction & bidding/i.test(text);
     check(`${label} loads`, rendered && !broke, broke ? text.match(/Could not load[^\n]*/i)?.[0] : 'no panel rendered');
   }
   await page.screenshot({ path: `${shots}/admin-03-records.png` });
 
+  console.log('\n\x1b[1mSettings really change the platform\x1b[0m');
+  await page.evaluate(() => [...document.querySelectorAll('nav button')].find((b) => b.textContent.trim() === 'Settings')?.click());
+  await waitFor(page, () => /BIDDING WINDOW/i.test(document.body.innerText), { timeout: 25000, label: 'settings catalogue' });
+  const settingsText = await page.evaluate(() => document.body.innerText);
+  check('every settings group renders', ['Auction & bidding', 'Cashback & loyalty', 'Suppliers & onboarding', 'Sign-in & security', 'Platform & branding', 'Availability'].every((g) => settingsText.includes(g)), '');
+  check('a toggle is rendered for boolean settings', await page.evaluate(() => !!document.querySelector('[role="switch"]')));
+
+  // Change the bidding window and confirm the API actually serves the new value
+  // — the point of this tab is that settings take effect, not that they save.
+  const windowInput = await page.evaluate(() => {
+    const labels = [...document.querySelectorAll('label')];
+    const target = labels.find((l) => /Bidding window/i.test(l.textContent));
+    const input = target?.querySelector('input');
+    if (!input) return false;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(input, '77');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  });
+  check('the bidding window is editable', windowInput);
+  await sleep(600);
+  const saveShown = await waitFor(page, () => /unsaved change/i.test(document.body.innerText), { timeout: 8000, label: 'save bar' });
+  check('unsaved changes are surfaced', saveShown);
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => /Save changes/i.test(b.textContent))?.click());
+
+  /** Poll health until it reports `want`, so the assertion is not a race. */
+  async function healthWindow(want, timeout = 20000) {
+    const deadline = Date.now() + timeout;
+    let seen = null;
+    while (Date.now() < deadline) {
+      seen = await page.evaluate(async () => {
+        const r = await fetch('/api/health?t=' + Date.now(), { cache: 'no-store' });
+        return (await r.json()).auction_window_seconds;
+      });
+      if (seen === want) return seen;
+      await sleep(500);
+    }
+    return seen;
+  }
+
+  const applied = await healthWindow(77);
+  check('the change is live in the API', applied === 77, `health says ${applied}`);
+
+  // Put it back so a later run starts from the default.
+  await page.evaluate(async () => {
+    await fetch('/api/admin/settings/auction_window_seconds', { method: 'DELETE' });
+  });
+  const restored = await healthWindow(120);
+  check('resetting restores the default', restored === 120, `health says ${restored}`);
+  await page.screenshot({ path: `${shots}/admin-04-settings.png` });
+
+  console.log('\n\x1b[1mSeller drawer and KYC\x1b[0m');
+  await page.evaluate(() => [...document.querySelectorAll('nav button')].find((b) => b.textContent.trim() === 'Sellers')?.click());
+  await sleep(2000);
+  const opened = await page.evaluate(() => {
+    const button = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Open');
+    if (button) { button.click(); return true; }
+    return false;
+  });
+  check('a seller record opens', opened);
+  if (opened) {
+    await waitFor(page, () => /Identity & compliance/i.test(document.body.innerText), { timeout: 15000, label: 'seller drawer' });
+    const drawer = await page.evaluate(() => document.body.innerText);
+    check('the KYC checks are listed', /GSTIN/.test(drawer) && /Registered address/.test(drawer) && /Bank account/.test(drawer));
+    check('business details are editable', /Registered business name/i.test(drawer));
+    check('account standing offers actions', /Mark /i.test(drawer));
+    await page.screenshot({ path: `${shots}/admin-05-seller.png` });
+    await page.keyboard.press('Escape');
+    await sleep(800);
+  }
+
+  console.log('\n\x1b[1mCustomer drawer\x1b[0m');
+  await page.evaluate(() => [...document.querySelectorAll('nav button')].find((b) => b.textContent.trim() === 'Customers')?.click());
+  await sleep(2000);
+  const custOpened = await page.evaluate(() => {
+    const button = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Open');
+    if (button) { button.click(); return true; }
+    return false;
+  });
+  check('a customer record opens', custOpened);
+  if (custOpened) {
+    await waitFor(page, () => /Account standing/i.test(document.body.innerText), { timeout: 15000, label: 'customer drawer' });
+    const drawer = await page.evaluate(() => document.body.innerText);
+    check('wallet and orders are shown', /Wallet/i.test(drawer) && /Orders/i.test(drawer));
+    check('the profile is editable', /Lifetime spend/i.test(drawer));
+    await page.screenshot({ path: `${shots}/admin-06-customer.png` });
+    await page.keyboard.press('Escape');
+    await sleep(800);
+  }
+
+  console.log('\n\x1b[1mBroadcast\x1b[0m');
+  await page.evaluate(() => [...document.querySelectorAll('nav button')].find((b) => b.textContent.trim() === 'Broadcast')?.click());
+  await sleep(1500);
+  const broadcast = await page.evaluate(() => document.body.innerText);
+  check('the composer renders', /Send an announcement/i.test(broadcast));
+  check('it previews what users will see', /Preview/i.test(broadcast));
+  // Sending is confirmed in two steps; check the guard exists without sending.
+  const guarded = await page.evaluate(() => {
+    const send = [...document.querySelectorAll('button')].find((b) => /Review and send/i.test(b.textContent));
+    return !!send && send.disabled;
+  });
+  check('sending is disabled until there is a message', guarded);
+
   console.log('\n\x1b[1mSearch\x1b[0m');
-  await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Suppliers')?.click());
+  await page.evaluate(() => [...document.querySelectorAll('nav button')].find((b) => b.textContent.trim() === 'Sellers')?.click());
   await sleep(1200);
   await fill('input[placeholder="Search"]', 'test');
   await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Refresh')?.click());

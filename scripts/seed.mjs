@@ -61,6 +61,7 @@ const INDEXES = {
   groups: [[{ product_key: 1, status: 1 }, {}]],
   admin_audit: [[{ created_at: -1 }, {}]],
   platform_settings: [[{ key: 1 }, { unique: true }]],
+  kyc_events: [[{ supplier_id: 1, created_at: -1 }, {}]],
 };
 
 const client = new MongoClient(uri, { serverSelectionTimeoutMS: 8000 });

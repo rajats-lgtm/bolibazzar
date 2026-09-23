@@ -113,7 +113,7 @@ LAN IP or a public hostname — not `localhost`.
 
 ```bash
 set -a && . ./.env.uat && set +a                       # admin key, for the admin checks
-node scripts/smoke.mjs        http://<uat-host>:3000  # 169 end-to-end API assertions
+node scripts/smoke.mjs        http://<uat-host>:3000  # 214 end-to-end API assertions
 node scripts/ui-check.mjs     http://<uat-host>:3000  # drives the buyer and supplier UI
 node scripts/admin-check.mjs  http://<uat-host>:3001  # the admin console
 node scripts/landing-check.mjs http://<uat-host>:3002 # the public marketing site

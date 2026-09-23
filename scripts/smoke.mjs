@@ -511,12 +511,17 @@ if (!adminKey || !adminEmail) {
   const badType = await admin.call('/admin/records?type=platform_settings');
   check('an unlisted record type is refused', badType.status >= 400, `got ${badType.status}`);
 
-  const setting = await admin.call('/admin/settings', { method: 'PATCH', body: JSON.stringify({ key: 'smoke_test_flag', value: true }) });
+  // Settings are a closed registry now, so anything not in it is refused —
+  // including the arbitrary keys the console used to accept.
+  const setting = await admin.call('/admin/settings', { method: 'PATCH', body: JSON.stringify({ key: 'support_email', value: 'help@bolibazzar.in' }) });
   check('a platform setting can be written', setting.ok === true, setting.error);
+  await admin.call('/admin/settings/support_email', { method: 'DELETE' });
   const reserved = await admin.call('/admin/settings', { method: 'PATCH', body: JSON.stringify({ key: 'razorpay_secret', value: 'x' }) });
   check('reserved setting keys are refused', reserved.status >= 400, `got ${reserved.status}`);
   const badKey = await admin.call('/admin/settings', { method: 'PATCH', body: JSON.stringify({ key: 'Bad Key!', value: 1 }) });
   check('malformed setting keys are refused', badKey.status >= 400, `got ${badKey.status}`);
+  const arbitrary = await admin.call('/admin/settings', { method: 'PATCH', body: JSON.stringify({ key: 'smoke_test_flag', value: true }) });
+  check('arbitrary keys are no longer accepted', arbitrary.status === 400, `got ${arbitrary.status}`);
 
   // Every admin action above should have left a trail.
   const audit = await admin.call('/admin/audit');
@@ -621,6 +626,145 @@ if (!adminKey || !adminEmail) {
   await admin.call(`/admin/customers/${encodeURIComponent(victimEmail)}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'active' }) });
   const restored = await victim.call('/me');
   check('restoring the account restores access', restored.ok === true, `status ${restored.status}`);
+
+  // --- settings ------------------------------------------------------------
+  // These used to be write-only: the console stored a key and listed it back
+  // while nothing read it, so every "setting" was decorative. Each check below
+  // asserts the platform actually behaves differently afterwards.
+  section('Admin settings');
+
+  const catalogue = await admin.call('/admin/settings');
+  check('the settings catalogue loads', Array.isArray(catalogue.groups) && catalogue.groups.length >= 6, JSON.stringify(catalogue).slice(0, 120));
+  const allSettings = (catalogue.groups || []).flatMap((g) => g.settings || []);
+  check('every setting declares a type and default', allSettings.every((x) => x.type && 'default' in x), '');
+  check('no secret is exposed as a setting', !allSettings.some((x) => /secret|password|key$/i.test(x.key)), '');
+
+  const windowBefore = (await stranger.call('/health')).auction_window_seconds;
+  const setWindow = await admin.call('/admin/settings', { method: 'PATCH', body: JSON.stringify({ key: 'auction_window_seconds', value: 63 }) });
+  check('a setting can be written', setWindow.ok === true, setWindow.error);
+  const windowAfter = (await stranger.call('/health')).auction_window_seconds;
+  check('and it changes real behaviour', windowAfter === 63, `${windowBefore} -> ${windowAfter}`);
+
+  const tooSmall = await admin.call('/admin/settings', { method: 'PATCH', body: JSON.stringify({ key: 'auction_window_seconds', value: 2 }) });
+  check('out-of-range values are refused', tooSmall.status === 400 && !!tooSmall.errors, JSON.stringify(tooSmall).slice(0, 120));
+  const unknown = await admin.call('/admin/settings', { method: 'PATCH', body: JSON.stringify({ key: 'not_a_setting', value: 1 }) });
+  check('unknown settings are refused', unknown.status === 400, `got ${unknown.status}`);
+
+  const batch = await admin.call('/admin/settings', { method: 'PATCH', body: JSON.stringify({ updates: [
+    { key: 'cashback_silver_pct', value: 4 }, { key: 'tier_gold_min_inr', value: 40000 },
+  ] }) });
+  check('a batch of settings saves together', batch.ok === true && batch.updated?.length === 2, batch.error);
+  const partial = await admin.call('/admin/settings', { method: 'PATCH', body: JSON.stringify({ updates: [
+    { key: 'cashback_gold_pct', value: 7 }, { key: 'cashback_platinum_pct', value: 900 },
+  ] }) });
+  check('a batch with one bad value saves none of it', partial.status === 400, `got ${partial.status}`);
+  const goldAfter = (await admin.call('/admin/settings')).groups.flatMap((g) => g.settings).find((x) => x.key === 'cashback_gold_pct');
+  check('the good half of a rejected batch was not applied', goldAfter?.value !== 7, String(goldAfter?.value));
+
+  const reset = await admin.call('/admin/settings/auction_window_seconds', { method: 'DELETE' });
+  check('a setting can be reset to its default', reset.ok === true, reset.error);
+  check('the default is live again', (await stranger.call('/health')).auction_window_seconds === windowBefore, '');
+  await admin.call('/admin/settings/cashback_silver_pct', { method: 'DELETE' });
+  await admin.call('/admin/settings/tier_gold_min_inr', { method: 'DELETE' });
+
+  // Availability switches genuinely close the doors they name.
+  await admin.call('/admin/settings', { method: 'PATCH', body: JSON.stringify({ key: 'chat_enabled', value: false }) });
+  const chatOff = await buyer.call('/messages', { method: 'POST', body: JSON.stringify({ offer_id: bid.offer.id, text: 'hello' }) });
+  check('turning chat off blocks messages', chatOff.status === 503, `got ${chatOff.status}`);
+  await admin.call('/admin/settings/chat_enabled', { method: 'DELETE' });
+  const chatBack = await buyer.call('/messages', { method: 'POST', body: JSON.stringify({ offer_id: bid.offer.id, text: 'hello again' }) });
+  check('and turning it back on restores them', chatBack.ok === true, chatBack.error);
+
+  await admin.call('/admin/settings', { method: 'PATCH', body: JSON.stringify({ key: 'ordering_enabled', value: false }) });
+  const orderOff = await buyer.call('/payments/order', { method: 'POST', body: JSON.stringify({ offer_id: bid.offer.id }) });
+  check('turning ordering off blocks checkout', orderOff.status === 503, `got ${orderOff.status}`);
+  await admin.call('/admin/settings/ordering_enabled', { method: 'DELETE' });
+
+  // Maintenance mode must not lock the operator out of the switch.
+  await admin.call('/admin/settings', { method: 'PATCH', body: JSON.stringify({ key: 'maintenance_mode', value: true }) });
+  const duringMaintenance = await buyer.call('/me');
+  check('maintenance mode closes the app', duringMaintenance.status === 503, `got ${duringMaintenance.status}`);
+  const healthDuring = await stranger.call('/health');
+  check('health stays up during maintenance', healthDuring.status === 'ok', JSON.stringify(healthDuring).slice(0, 80));
+  const adminDuring = await admin.call('/admin/overview');
+  check('admin stays reachable during maintenance', adminDuring.ok === true, `got ${adminDuring.status}`);
+  await admin.call('/admin/settings/maintenance_mode', { method: 'DELETE' });
+  check('and the app reopens afterwards', (await buyer.call('/me')).ok === true, '');
+
+  // --- profile editing -----------------------------------------------------
+  section('Admin profile editing');
+
+  const customerDetail = await admin.call('/admin/customers/buyer%40test.in');
+  check('a customer record loads in full', customerDetail.customer?.email === 'buyer@test.in' && Array.isArray(customerDetail.orders), JSON.stringify(customerDetail).slice(0, 100));
+  check('their wallet comes with it', 'wallet' in customerDetail, '');
+
+  const editCustomer = await admin.call('/admin/customers/buyer%40test.in', { method: 'PATCH', body: JSON.stringify({ name: 'Priya Sharma', notes: 'VIP' }) });
+  check('a customer profile can be edited', editCustomer.ok === true && editCustomer.customer?.name === 'Priya Sharma', editCustomer.error);
+  const spendEdit = await admin.call('/admin/customers/buyer%40test.in', { method: 'PATCH', body: JSON.stringify({ total_spent_inr: 250000 }) });
+  check('editing spend recomputes the loyalty tier', spendEdit.customer?.tier === 'platinum', String(spendEdit.customer?.tier));
+  const missingCustomer = await admin.call('/admin/customers/ghost%40nowhere.test', { method: 'PATCH', body: JSON.stringify({ name: 'x' }) });
+  check('editing an unknown customer is a 404', missingCustomer.status === 404, `got ${missingCustomer.status}`);
+
+  const supplierDetail = await admin.call(`/admin/suppliers/${bid.offer.supplier_id}`);
+  check('a seller record loads in full', !!supplierDetail.supplier?.business_name && Array.isArray(supplierDetail.offers), JSON.stringify(supplierDetail).slice(0, 100));
+
+  const editSupplier = await admin.call(`/admin/suppliers/${bid.offer.supplier_id}`, { method: 'PATCH', body: JSON.stringify({ city: 'Pune', brand_authorisations: ['Apple', 'Samsung'] }) });
+  check('a seller profile can be edited', editSupplier.ok === true && editSupplier.supplier?.city === 'Pune', editSupplier.error);
+  check('list fields are stored as lists', Array.isArray(editSupplier.supplier?.brand_authorisations), '');
+  const badBusinessType = await admin.call(`/admin/suppliers/${bid.offer.supplier_id}`, { method: 'PATCH', body: JSON.stringify({ supplier_type: 'not_a_type' }) });
+  check('an invalid business type is refused', badBusinessType.status === 400, `got ${badBusinessType.status}`);
+
+  // --- KYC -----------------------------------------------------------------
+  section('Admin KYC verification');
+
+  const verify = await admin.call(`/admin/suppliers/${bid.offer.supplier_id}/kyc`, { method: 'PATCH', body: JSON.stringify({ gst_verified: true, address_verified: true, kyc_note: 'Checked on the GST portal' }) });
+  check('checks can be recorded', verify.ok === true && verify.supplier?.gst_verified === true, verify.error);
+  check('a verification is stamped with who and when', !!verify.supplier?.gst_verified_by && !!verify.supplier?.gst_verified_at, '');
+
+  const kycView = await admin.call(`/admin/suppliers/${bid.offer.supplier_id}/kyc`);
+  check('the KYC view lists every check', ['gst_verified', 'address_verified', 'phone_verified', 'bank_verified'].every((c) => c in (kycView.checks || {})), '');
+  check('the history records the decision', (kycView.history || []).length > 0, String(kycView.history?.length));
+  check('the GSTIN format is checked independently', kycView.gst_format_valid !== undefined, '');
+
+  const revoke = await admin.call(`/admin/suppliers/${bid.offer.supplier_id}/kyc`, { method: 'PATCH', body: JSON.stringify({ gst_verified: false, kyc_note: 'Certificate expired' }) });
+  check('a verification can be revoked', revoke.ok === true && revoke.supplier?.gst_verified === false, revoke.error);
+  const historyAfter = await admin.call(`/admin/suppliers/${bid.offer.supplier_id}/kyc`);
+  check('revoking is recorded too', (historyAfter.history || []).length >= 2, String(historyAfter.history?.length));
+  const badCheck = await admin.call(`/admin/suppliers/${bid.offer.supplier_id}/kyc`, { method: 'PATCH', body: JSON.stringify({ gst_verified: 'maybe' }) });
+  check('a non-boolean check is refused', badCheck.status === 400, `got ${badCheck.status}`);
+
+  // Changing the GSTIN must drop a verification that referred to the old one.
+  await admin.call(`/admin/suppliers/${bid.offer.supplier_id}/kyc`, { method: 'PATCH', body: JSON.stringify({ gst_verified: true }) });
+  const currentGst = (await admin.call(`/admin/suppliers/${bid.offer.supplier_id}`)).supplier?.gst;
+  const differentGst = currentGst === '27AAECT1234A1Z5' ? '29AAECT1234A1ZM' : '27AAECT1234A1Z5';
+  const changedGst = await admin.call(`/admin/suppliers/${bid.offer.supplier_id}`, { method: 'PATCH', body: JSON.stringify({ gst: differentGst }) });
+  check('changing the GSTIN clears its verification', changedGst.supplier?.gst_verified === false, `${currentGst} -> ${differentGst}, verified=${changedGst.supplier?.gst_verified}`);
+
+  // Re-saving the same number is not a change, so a verification survives it.
+  await admin.call(`/admin/suppliers/${bid.offer.supplier_id}/kyc`, { method: 'PATCH', body: JSON.stringify({ gst_verified: true }) });
+  const sameGst = await admin.call(`/admin/suppliers/${bid.offer.supplier_id}`, { method: 'PATCH', body: JSON.stringify({ gst: differentGst }) });
+  check('re-saving the same GSTIN keeps it verified', sameGst.supplier?.gst_verified === true, String(sameGst.supplier?.gst_verified));
+
+  // --- broadcast -----------------------------------------------------------
+  section('Admin broadcast');
+  const broadcast = await admin.call('/admin/broadcast', { method: 'POST', body: JSON.stringify({ audience: 'buyers', title: 'Scheduled maintenance', body: 'We will be briefly offline on Sunday.' }) });
+  check('an announcement sends', broadcast.ok === true && broadcast.sent > 0, broadcast.error);
+  const buyerFeed = await buyer.call('/notifications');
+  check('it lands in the notification feed', (buyerFeed.notifications || []).some((n) => n.type === 'announcement'), '');
+  const badAudience = await admin.call('/admin/broadcast', { method: 'POST', body: JSON.stringify({ audience: 'nobody', title: 'x', body: 'y' }) });
+  check('an unknown audience is refused', badAudience.status === 400, `got ${badAudience.status}`);
+  const emptyBroadcast = await admin.call('/admin/broadcast', { method: 'POST', body: JSON.stringify({ audience: 'buyers', title: '', body: '' }) });
+  check('an empty announcement is refused', emptyBroadcast.status === 400, `got ${emptyBroadcast.status}`);
+
+  // --- orders --------------------------------------------------------------
+  const anyOrder = (await admin.call('/admin/records?type=orders&limit=1')).records?.[0];
+  if (anyOrder) {
+    section('Admin order control');
+    const moved = await admin.call(`/admin/orders/${anyOrder.id}`, { method: 'PATCH', body: JSON.stringify({ stage: 'shipped', note: 'manually advanced' }) });
+    check('an order stage can be corrected', moved.ok === true && moved.order?.stage === 'shipped', moved.error);
+    const badStage = await admin.call(`/admin/orders/${anyOrder.id}`, { method: 'PATCH', body: JSON.stringify({ stage: 'teleported' }) });
+    check('an invalid stage is refused', badStage.status === 400, `got ${badStage.status}`);
+  }
 
   // Moderation must never be reachable without an admin session.
   const sneaky = await stranger.call('/admin/customers/buyer%40test.in/wallet', { method: 'PATCH', body: JSON.stringify({ amount_inr: 100000 }) });

@@ -12,10 +12,11 @@ import {
   normaliseEmail, isEmail, normalisePhone, isProductionEnv, appEnv,
 } from '@/lib/auth';
 import { computeValueScore, computeTier } from '@/lib/scoring';
-import { advanceAuction, runAutoBidMatching, AUCTION_WINDOW_MS, demoBiddersEnabled } from '@/lib/bidding';
+import { advanceAuction, runAutoBidMatching, auctionWindowMs } from '@/lib/bidding';
 import { createOrder, trackOrder, setOrderStage, findOrderByOffer, STAGE_KEYS } from '@/lib/orders';
 import { hasMailer } from '@/lib/mailer';
-import { validateSupplierRegistration, SUPPLIER_TYPES } from '@/lib/kyc';
+import { validateSupplierRegistration, validateGstin, SUPPLIER_TYPES } from '@/lib/kyc';
+import { getSettings, describeSettings, validateSetting, invalidateSettings, tierTable, SETTINGS } from '@/lib/settings';
 import {
   hasWhatsApp, sendOtp, addNotification, listNotifications, markNotificationsRead,
   notifySuppliersOfRequest, notifyBuyerOfOffer, notifySupplierOfWin, notifyChatMessage,
@@ -224,6 +225,21 @@ async function currentSupplier(db, req) {
 }
 
 /**
+ * Whether maintenance mode should block this request.
+ *
+ * Admin routes are always allowed — otherwise turning maintenance on would
+ * lock the operator out of the switch that turns it off. Health is allowed so
+ * orchestrators do not restart a deliberately paused service, and signing out
+ * is allowed so nobody is trapped in a session they cannot end.
+ */
+function maintenanceApplies(path, method) {
+  if (path === '/health') return false;
+  if (path.startsWith('/admin/')) return false;
+  if (path === '/auth/session' && method === 'DELETE') return false;
+  return true;
+}
+
+/**
  * Returns a message when the signed-in account has been suspended, so the
  * caller can refuse the request. Both lookups are on indexed `email` fields
  * with a one-key projection.
@@ -268,8 +284,10 @@ async function route(req, { params }) {
       payments_test_mode: paymentsTestMode(),
       whatsapp_live: hasWhatsApp(),
       email_live: hasMailer(),
-      demo_bidders: demoBiddersEnabled(),
-      auction_window_seconds: Math.round(AUCTION_WINDOW_MS / 1000),
+      demo_bidders: (await getSettings()).demo_bidders_enabled !== false,
+      auction_window_seconds: (await getSettings()).auction_window_seconds,
+      maintenance_mode: (await getSettings()).maintenance_mode === true,
+      platform_name: (await getSettings()).platform_name,
     });
   }
 
@@ -316,6 +334,15 @@ async function route(req, { params }) {
     if (suspended) return err(suspended, 403);
   }
 
+  // Maintenance mode takes the product offline for everyone but the admin
+  // console, which is how it gets turned back on. Health stays up so a load
+  // balancer does not also declare the service dead, and reads of the
+  // settings-derived banner still work.
+  if (maintenanceApplies(path, method)) {
+    const { maintenance_mode: on, maintenance_message: message } = await getSettings();
+    if (on) return err(message || 'BoliBazzar is briefly down for maintenance.', 503);
+  }
+
   // =========================================================================
   // AUTH — one-time passcode
   // =========================================================================
@@ -330,15 +357,20 @@ async function route(req, { params }) {
     const destination = phone || email;
     const channel = phone ? 'phone' : 'email';
 
-    // Throttle per destination. Production stays tight; elsewhere the limit is
-    // relaxed so an automated suite can run repeatedly without tripping it.
-    const limit = isProductionEnv() ? 5 : Number(process.env.OTP_RATE_LIMIT || 50);
+    // Throttle per destination. The limit is a setting, so it can be tightened
+    // during an attack or relaxed for a test run without a redeploy. Outside
+    // production the default is relaxed so an automated suite can run
+    // repeatedly without tripping it.
+    const settings = await getSettings();
+    const limit = isProductionEnv()
+      ? Number(settings.otp_rate_limit || 5)
+      : Number(process.env.OTP_RATE_LIMIT || 50);
     const since = new Date(Date.now() - 15 * 60 * 1000).toISOString();
     const recent = await db.collection('otps').countDocuments({ destination, created_at: { $gte: since } });
     if (recent >= limit) return err('too many codes requested, please wait a few minutes', 429);
 
     const code = generateOtp();
-    const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+    const expiresAt = new Date(Date.now() + Number(settings.otp_expiry_minutes || 10) * 60 * 1000);
     const record = { id: uuidv4() };
     await db.collection('otps').insertOne({
       id: record.id,
@@ -396,11 +428,16 @@ async function route(req, { params }) {
 
     const now = new Date().toISOString();
 
+    const authSettings = await getSettings();
+
     if (role === ROLES.SUPPLIER) {
       const accountEmail = record.email || email;
       if (!isEmail(accountEmail)) return err('an email address is required for supplier accounts');
       let supplier = await db.collection('suppliers').findOne({ email: accountEmail }, { projection: { _id: 0 } });
       if (!supplier) {
+        if (authSettings.new_signups_enabled === false) {
+          return err('new seller registrations are paused right now', 403);
+        }
         supplier = {
           id: uuidv4(),
           business_name: body.business_name?.trim() || accountEmail.split('@')[0],
@@ -410,7 +447,7 @@ async function route(req, { params }) {
           gst: '', gst_valid: false,
           categories: ['electronics'], brand_authorisations: [],
           supplier_type: body.supplier_type || 'retail_store',
-          status: 'pending_review',
+          status: authSettings.supplier_auto_approve ? 'approved' : 'pending_review',
           is_demo: false,
           rating: 4.5, reviews: 0,
           created_at: now,
@@ -429,6 +466,9 @@ async function route(req, { params }) {
     const accountEmail = record.email || email;
     if (!isEmail(accountEmail)) return err('an email address is required');
     let user = await db.collection('users').findOne({ email: accountEmail }, { projection: { _id: 0 } });
+    if (!user && authSettings.new_signups_enabled === false) {
+      return err('new sign-ups are paused right now', 403);
+    }
     if (!user) {
       user = {
         id: uuidv4(),
@@ -463,7 +503,7 @@ async function route(req, { params }) {
     return attachSession(
       ok({
         ok: true, role,
-        user: { ...user, tier: computeTier(user.total_spent_inr || 0) },
+        user: { ...user, tier: computeTier(user.total_spent_inr || 0, await tierTable()) },
         token: createSessionToken(ROLES.BUYER, accountEmail),
       }),
       ROLES.BUYER,
@@ -477,7 +517,7 @@ async function route(req, { params }) {
       supplierSession ? db.collection('suppliers').findOne({ email: supplierSession }, { projection: { _id: 0 } }) : null,
     ]);
     return ok({
-      buyer: user ? { ...user, tier: computeTier(user.total_spent_inr || 0) } : null,
+      buyer: user ? { ...user, tier: computeTier(user.total_spent_inr || 0, await tierTable()) } : null,
       supplier: supplier || null,
       admin: sessionAdmin(req),
     });
@@ -503,7 +543,7 @@ async function route(req, { params }) {
       db.collection('requests').find({ buyer_email: buyer }, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(50).toArray(),
       db.collection('orders').find({ buyer_email: buyer }, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(50).toArray(),
     ]);
-    return ok({ user: { ...user, tier: computeTier(user.total_spent_inr || 0) }, requests, orders });
+    return ok({ user: { ...user, tier: computeTier(user.total_spent_inr || 0, await tierTable()) }, requests, orders });
   }
 
   if (path === '/wallet' && method === 'GET') {
@@ -611,6 +651,10 @@ async function route(req, { params }) {
   if (path === '/requests' && method === 'POST') {
     const body = await readJson(req);
     if (!body.requirement || typeof body.requirement !== 'object') return err('requirement required');
+    const maxBudget = Number((await getSettings()).max_request_budget_inr || 0);
+    if (maxBudget > 0 && Number(body.requirement.budget_inr) > maxBudget) {
+      return err(`budget cannot exceed ${maxBudget.toLocaleString('en-IN')}`);
+    }
     let name = body.buyer_name || 'Guest Buyer';
     if (buyer) {
       const user = await db.collection('users').findOne({ email: buyer }, { projection: { name: 1 } });
@@ -625,7 +669,7 @@ async function route(req, { params }) {
       requirement: body.requirement,
       status: 'open',
       auction_started_at: now,
-      auction_ends_at: new Date(Date.now() + AUCTION_WINDOW_MS).toISOString(),
+      auction_ends_at: new Date(Date.now() + (await auctionWindowMs())).toISOString(),
       created_at: now,
     };
     await db.collection('requests').insertOne(doc);
@@ -693,6 +737,17 @@ async function route(req, { params }) {
     const supplier = await currentSupplier(db, req);
     if (!supplier) return err('supplier sign in required', 401);
     if (supplier.status !== 'approved') return err('your supplier account is awaiting approval', 403);
+
+    // Two further gates an admin controls: a verified GSTIN, and a floor on
+    // seller rating. Both default to off so nothing changes until enabled.
+    const bidSettings = await getSettings();
+    if (bidSettings.require_gst_for_bidding && !supplier.gst_verified) {
+      return err('your GSTIN must be verified before you can bid', 403);
+    }
+    const minRating = Number(bidSettings.supplier_min_rating || 0);
+    if (minRating > 0 && Number(supplier.rating ?? 5) < minRating) {
+      return err('your rating is below the minimum required to bid', 403);
+    }
 
     const request = await db.collection('requests').findOne({ id: offerMatch[1] });
     if (!request) return err('request not found', 404);
@@ -820,6 +875,7 @@ async function route(req, { params }) {
   }
 
   if (path === '/messages' && method === 'POST') {
+    if ((await getSettings()).chat_enabled === false) return err('chat is turned off right now', 503);
     const body = await readJson(req);
     if (!body.offer_id || !String(body.text || '').trim()) return err('offer_id and text required');
     const context = await chatParticipants(body.offer_id);
@@ -885,6 +941,7 @@ async function route(req, { params }) {
   // =========================================================================
 
   if (path === '/payments/order' && method === 'POST') {
+    if ((await getSettings()).ordering_enabled === false) return err('new orders are paused right now', 503);
     if (!buyer) return err('sign in required', 401);
     const { offer_id, wallet_apply_inr } = await readJson(req);
     if (!offer_id) return err('offer_id required');
@@ -910,7 +967,11 @@ async function route(req, { params }) {
     if (requested > 0) {
       const wallet = await db.collection('wallets').findOne({ email: buyer });
       if (wallet?.balance_inr > 0) {
-        walletUsed = Math.max(0, Math.min(wallet.balance_inr, requested, amount - 1));
+        // An admin can cap how much of an order may be settled from wallet
+        // balance, so cashback cannot be turned into a free order.
+        const capPct = Number((await getSettings()).wallet_max_redeem_pct ?? 100);
+        const cap = Math.floor((amount * Math.max(0, Math.min(100, capPct))) / 100);
+        walletUsed = Math.max(0, Math.min(wallet.balance_inr, requested, amount - 1, cap));
       }
     }
     const finalAmount = amount - walletUsed;
@@ -992,7 +1053,7 @@ async function route(req, { params }) {
 
     const user = await db.collection('users').findOne({ email: buyer });
     const newSpent = (user?.total_spent_inr || 0) + (payment.original_amount_inr || payment.amount_inr);
-    const tier = computeTier(newSpent);
+    const tier = computeTier(newSpent, await tierTable());
     await db.collection('users').updateOne({ email: buyer }, { $set: { total_spent_inr: newSpent, tier: tier.tier } });
 
     let wallet = await db.collection('wallets').findOne({ email: buyer });
@@ -1431,6 +1492,272 @@ async function route(req, { params }) {
     return ok({ records });
   }
 
+  // =========================================================================
+  // ADMIN — full profile editing
+  //
+  // Status and wallet already had endpoints, but everything else about a person
+  // or a business could only be changed in the database by hand. These let the
+  // console own the whole record, with the same audit trail as every other
+  // admin action: what changed, from what, to what, and who did it.
+  // =========================================================================
+
+  /** Only these fields may be written, and each is normalised on the way in. */
+  const CUSTOMER_FIELDS = {
+    name: (v) => String(v ?? '').trim().slice(0, 120),
+    phone: (v) => normalisePhone(v) || '',
+    notes: (v) => String(v ?? '').slice(0, 2000),
+    total_spent_inr: (v) => Math.max(0, Number(v) || 0),
+  };
+
+  const adminCustomerGet = path.match(/^\/admin\/customers\/([^/]+)$/);
+  if (adminCustomerGet && method === 'GET') {
+    const email = normaliseEmail(decodeURIComponent(adminCustomerGet[1]));
+    const user = await db.collection('users').findOne({ email }, { projection: { _id: 0 } });
+    if (!user) return err('customer not found', 404);
+    const [wallet, orders, requests, reviews] = await Promise.all([
+      db.collection('wallets').findOne({ email }, { projection: { _id: 0 } }),
+      db.collection('orders').find({ buyer_email: email }, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(50).toArray(),
+      db.collection('requests').find({ buyer_email: email }, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(50).toArray(),
+      db.collection('reviews').find({ buyer_email: email }, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(50).toArray(),
+    ]);
+    return ok({
+      customer: { ...user, tier: computeTier(user.total_spent_inr || 0, await tierTable()) },
+      wallet: wallet || null, orders, requests, reviews,
+    });
+  }
+
+  if (adminCustomerGet && method === 'PATCH') {
+    const actor = sessionAdmin(req);
+    const email = normaliseEmail(decodeURIComponent(adminCustomerGet[1]));
+    const before = await db.collection('users').findOne({ email }, { projection: { _id: 0 } });
+    if (!before) return err('customer not found', 404);
+
+    const body = await readJson(req);
+    const changes = {};
+    for (const [field, normalise] of Object.entries(CUSTOMER_FIELDS)) {
+      if (!(field in body)) continue;
+      const value = normalise(body[field]);
+      if (value !== before[field]) changes[field] = value;
+    }
+    if (!Object.keys(changes).length) return ok({ ok: true, customer: before, changed: [] });
+
+    // Spend drives the loyalty tier, so editing it has to recompute the tier
+    // rather than leaving the two disagreeing.
+    if ('total_spent_inr' in changes) {
+      changes.tier = computeTier(changes.total_spent_inr, await tierTable()).tier;
+    }
+    changes.updated_at = new Date().toISOString();
+    changes.updated_by = actor;
+
+    await db.collection('users').updateOne({ email }, { $set: changes });
+    const after = await db.collection('users').findOne({ email }, { projection: { _id: 0 } });
+    await auditAdmin(db, 'edit_customer', actor, {
+      email,
+      changes: Object.fromEntries(Object.keys(changes)
+        .filter((k) => !['updated_at', 'updated_by'].includes(k))
+        .map((k) => [k, { before: before[k] ?? null, after: changes[k] }])),
+    });
+    return ok({ ok: true, customer: after, changed: Object.keys(changes) });
+  }
+
+  const SUPPLIER_FIELDS = {
+    business_name: (v) => String(v ?? '').trim().slice(0, 160),
+    contact_name: (v) => String(v ?? '').trim().slice(0, 120),
+    phone: (v) => normalisePhone(v) || '',
+    address: (v) => String(v ?? '').trim().slice(0, 400),
+    city: (v) => String(v ?? '').trim().slice(0, 80),
+    pincode: (v) => String(v ?? '').replace(/\D/g, '').slice(0, 6),
+    gst: (v) => String(v ?? '').trim().toUpperCase().slice(0, 15),
+    supplier_type: (v) => (SUPPLIER_TYPES.includes(v) ? v : undefined),
+    categories: (v) => (Array.isArray(v) ? v.map((x) => String(x).trim().slice(0, 60)).filter(Boolean).slice(0, 30) : undefined),
+    brand_authorisations: (v) => (Array.isArray(v) ? v.map((x) => String(x).trim().slice(0, 60)).filter(Boolean).slice(0, 60) : undefined),
+    rating: (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 && n <= 5 ? n : undefined; },
+    notes: (v) => String(v ?? '').slice(0, 2000),
+    is_demo: (v) => v === true || v === false ? v : undefined,
+  };
+
+  const adminSupplierGet = path.match(/^\/admin\/suppliers\/([^/]+)$/);
+  if (adminSupplierGet && method === 'GET') {
+    const supplier = await db.collection('suppliers').findOne({ id: adminSupplierGet[1] }, { projection: { _id: 0 } });
+    if (!supplier) return err('supplier not found', 404);
+    const [offers, reviews, rules, orders] = await Promise.all([
+      db.collection('offers').find({ supplier_id: supplier.id }, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(50).toArray(),
+      db.collection('reviews').find({ supplier_id: supplier.id }, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(50).toArray(),
+      db.collection('supplier_rules').find({ supplier_id: supplier.id }, { projection: { _id: 0 } }).toArray(),
+      db.collection('orders').find({ supplier_email: supplier.email }, { projection: { _id: 0 } }).sort({ created_at: -1 }).limit(50).toArray(),
+    ]);
+    return ok({ supplier, offers, reviews, rules, orders, supplier_types: SUPPLIER_TYPES });
+  }
+
+  if (adminSupplierGet && method === 'PATCH') {
+    const actor = sessionAdmin(req);
+    const before = await db.collection('suppliers').findOne({ id: adminSupplierGet[1] }, { projection: { _id: 0 } });
+    if (!before) return err('supplier not found', 404);
+
+    const body = await readJson(req);
+    const changes = {};
+    const rejected = {};
+    for (const [field, normalise] of Object.entries(SUPPLIER_FIELDS)) {
+      if (!(field in body)) continue;
+      const value = normalise(body[field]);
+      if (value === undefined) { rejected[field] = 'invalid value'; continue; }
+      if (JSON.stringify(value) !== JSON.stringify(before[field])) changes[field] = value;
+    }
+    if (Object.keys(rejected).length) return err('some fields were rejected', 400, { errors: rejected });
+
+    // Changing the GSTIN invalidates any previous verification — the number an
+    // admin approved is no longer the number on file.
+    if ('gst' in changes && before.gst_verified) {
+      changes.gst_verified = false;
+      changes.gst_verified_at = null;
+      changes.gst_verified_by = null;
+    }
+    if ('gst' in changes && changes.gst) {
+      changes.gst_valid = validateGstin(changes.gst).valid;
+    }
+    if (!Object.keys(changes).length) return ok({ ok: true, supplier: before, changed: [] });
+
+    changes.updated_at = new Date().toISOString();
+    changes.updated_by = actor;
+    await db.collection('suppliers').updateOne({ id: before.id }, { $set: changes });
+    const after = await db.collection('suppliers').findOne({ id: before.id }, { projection: { _id: 0 } });
+    await auditAdmin(db, 'edit_supplier', actor, {
+      id: before.id,
+      changes: Object.fromEntries(Object.keys(changes)
+        .filter((k) => !['updated_at', 'updated_by'].includes(k))
+        .map((k) => [k, { before: before[k] ?? null, after: changes[k] }])),
+    });
+    return ok({ ok: true, supplier: after, changed: Object.keys(changes) });
+  }
+
+  // --- KYC verification ----------------------------------------------------
+  // Each document is verified independently and recorded separately, so the
+  // audit trail shows which specific check a human actually performed rather
+  // than one opaque "approved".
+  const KYC_CHECKS = ['gst_verified', 'address_verified', 'phone_verified', 'bank_verified'];
+
+  const adminKyc = path.match(/^\/admin\/suppliers\/([^/]+)\/kyc$/);
+  if (adminKyc && method === 'PATCH') {
+    const actor = sessionAdmin(req);
+    const supplier = await db.collection('suppliers').findOne({ id: adminKyc[1] }, { projection: { _id: 0 } });
+    if (!supplier) return err('supplier not found', 404);
+
+    const body = await readJson(req);
+    const changes = {};
+    const now = new Date().toISOString();
+    for (const check of KYC_CHECKS) {
+      if (!(check in body)) continue;
+      if (typeof body[check] !== 'boolean') return err(`${check} must be true or false`);
+      changes[check] = body[check];
+      changes[`${check}_at`] = body[check] ? now : null;
+      changes[`${check}_by`] = body[check] ? actor : null;
+    }
+    if (typeof body.kyc_note === 'string') changes.kyc_note = body.kyc_note.slice(0, 2000);
+    if (!Object.keys(changes).length) return err('nothing to verify');
+
+    await db.collection('suppliers').updateOne({ id: supplier.id }, { $set: changes });
+
+    // A record per decision, so revoking a verification is as visible as
+    // granting one.
+    await db.collection('kyc_events').insertOne({
+      id: uuidv4(),
+      supplier_id: supplier.id,
+      business_name: supplier.business_name,
+      actor_email: actor,
+      checks: Object.fromEntries(KYC_CHECKS.filter((c) => c in changes).map((c) => [c, changes[c]])),
+      note: body.kyc_note || null,
+      created_at: now,
+    });
+    await auditAdmin(db, 'verify_supplier_kyc', actor, { id: supplier.id, checks: changes });
+
+    const after = await db.collection('suppliers').findOne({ id: supplier.id }, { projection: { _id: 0 } });
+    return ok({ ok: true, supplier: after });
+  }
+
+  if (adminKyc && method === 'GET') {
+    const supplier = await db.collection('suppliers').findOne({ id: adminKyc[1] }, { projection: { _id: 0 } });
+    if (!supplier) return err('supplier not found', 404);
+    const events = await db.collection('kyc_events')
+      .find({ supplier_id: supplier.id }, { projection: { _id: 0 } })
+      .sort({ created_at: -1 }).limit(100).toArray();
+    return ok({
+      supplier,
+      checks: Object.fromEntries(KYC_CHECKS.map((c) => [c, {
+        verified: supplier[c] === true,
+        at: supplier[`${c}_at`] || null,
+        by: supplier[`${c}_by`] || null,
+      }])),
+      gst_format_valid: supplier.gst ? validateGstin(supplier.gst) : null,
+      note: supplier.kyc_note || '',
+      history: events,
+    });
+  }
+
+  // --- orders --------------------------------------------------------------
+  const adminOrder = path.match(/^\/admin\/orders\/([^/]+)$/);
+  if (adminOrder && method === 'PATCH') {
+    const actor = sessionAdmin(req);
+    const order = await db.collection('orders').findOne({ id: adminOrder[1] }, { projection: { _id: 0 } });
+    if (!order) return err('order not found', 404);
+    const { stage, courier, tracking_id, note } = await readJson(req);
+
+    const changes = {};
+    if (stage !== undefined) {
+      if (!STAGE_KEYS.includes(stage)) return err(`stage must be one of: ${STAGE_KEYS.join(', ')}`);
+      changes.stage = stage;
+    }
+    if (typeof courier === 'string') changes.courier = courier.slice(0, 80);
+    if (typeof tracking_id === 'string') changes.tracking_id = tracking_id.slice(0, 80);
+    if (typeof note === 'string') changes.admin_note = note.slice(0, 2000);
+    if (!Object.keys(changes).length) return err('nothing to change');
+
+    changes.updated_at = new Date().toISOString();
+    changes.updated_by = actor;
+    await db.collection('orders').updateOne({ id: order.id }, { $set: changes });
+    await auditAdmin(db, 'edit_order', actor, { id: order.id, before: { stage: order.stage }, changes });
+    const after = await db.collection('orders').findOne({ id: order.id }, { projection: { _id: 0 } });
+    return ok({ ok: true, order: after });
+  }
+
+  // --- broadcast -----------------------------------------------------------
+  // Reaches people through the in-app feed, which every client already reads,
+  // rather than standing up a separate announcement channel.
+  if (path === '/admin/broadcast' && method === 'POST') {
+    const actor = sessionAdmin(req);
+    const { audience, title, body: message } = await readJson(req);
+    if (!['buyers', 'suppliers', 'everyone'].includes(audience)) {
+      return err('audience must be buyers, suppliers or everyone');
+    }
+    if (!String(title || '').trim()) return err('a title is required');
+    if (!String(message || '').trim()) return err('a message is required');
+
+    const recipients = [];
+    if (audience === 'buyers' || audience === 'everyone') {
+      const users = await db.collection('users').find({}, { projection: { _id: 0, email: 1 } }).toArray();
+      recipients.push(...users.map((u) => ({ email: u.email, audience: 'buyer' })));
+    }
+    if (audience === 'suppliers' || audience === 'everyone') {
+      const suppliers = await db.collection('suppliers').find({ is_demo: { $ne: true } }, { projection: { _id: 0, email: 1 } }).toArray();
+      recipients.push(...suppliers.map((s) => ({ email: s.email, audience: 'supplier' })));
+    }
+
+    let sent = 0;
+    for (const recipient of recipients) {
+      if (!recipient.email) continue;
+      await addNotification(db, {
+        audience: recipient.audience,
+        recipient: recipient.email,
+        type: 'announcement',
+        title: String(title).slice(0, 140),
+        body: String(message).slice(0, 1000),
+        data: { from: 'admin' },
+      });
+      sent += 1;
+    }
+    await auditAdmin(db, 'broadcast', actor, { audience, title, recipients: sent });
+    return ok({ ok: true, sent });
+  }
+
   const adminCustomerStatus = path.match(/^\/admin\/customers\/([^/]+)\/status$/);
   if (adminCustomerStatus && method === 'PATCH') {
     const actor = sessionAdmin(req);
@@ -1542,19 +1869,58 @@ async function route(req, { params }) {
     return ok({ ok: true, review_status });
   }
 
+  // The catalogue drives the console's Settings tab, so the definitions live in
+  // one place rather than being duplicated in the UI.
+  if (path === '/admin/settings' && method === 'GET') {
+    return ok({ groups: await describeSettings() });
+  }
+
   if (path === '/admin/settings' && method === 'PATCH') {
     const actor = sessionAdmin(req);
-    const { key, value } = await readJson(req);
-    if (!/^[a-z][a-z0-9_]{1,60}$/.test(key || '') || /secret|password|token|key/.test(key)) {
-      return err('invalid or reserved setting key');
+    const body = await readJson(req);
+
+    // Accept one {key, value} or a batch, so the console can save a whole
+    // group in one call and either all of it lands or none of it does.
+    const updates = Array.isArray(body.updates)
+      ? body.updates
+      : [{ key: body.key, value: body.value }];
+    if (!updates.length) return err('nothing to update');
+
+    const validated = [];
+    const errors = {};
+    for (const { key, value } of updates) {
+      if (!SETTINGS[key]) { errors[key || '(missing)'] = 'Unknown setting'; continue; }
+      const result = validateSetting(key, value);
+      if (!result.ok) { errors[key] = result.error; continue; }
+      validated.push({ key, value: result.value });
     }
-    await db.collection('platform_settings').updateOne(
-      { key },
-      { $set: { key, value, updated_at: new Date().toISOString(), updated_by: actor } },
-      { upsert: true }
-    );
-    await auditAdmin(db, 'update_platform_setting', actor, { key, value });
-    return ok({ ok: true, key, value });
+    if (Object.keys(errors).length) return err('some settings were rejected', 400, { errors });
+
+    const at = new Date().toISOString();
+    for (const { key, value } of validated) {
+      await db.collection('platform_settings').updateOne(
+        { key },
+        { $set: { key, value, updated_at: at, updated_by: actor } },
+        { upsert: true }
+      );
+    }
+    invalidateSettings();
+    await auditAdmin(db, 'update_platform_setting', actor, { changed: validated });
+    return ok({ ok: true, updated: validated, groups: await describeSettings() });
+  }
+
+  // Reset puts a key back to its shipped default by removing the override,
+  // which is not the same as writing the default value: the environment
+  // variable, if one is set, becomes effective again.
+  const settingResetMatch = path.match(/^\/admin\/settings\/([a-z0-9_]+)$/);
+  if (settingResetMatch && method === 'DELETE') {
+    const actor = sessionAdmin(req);
+    const key = settingResetMatch[1];
+    if (!SETTINGS[key]) return err('unknown setting', 404);
+    await db.collection('platform_settings').deleteOne({ key });
+    invalidateSettings();
+    await auditAdmin(db, 'reset_platform_setting', actor, { key });
+    return ok({ ok: true, key, groups: await describeSettings() });
   }
 
   return err(`route not found: ${method} ${path}`, 404);

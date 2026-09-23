@@ -78,7 +78,7 @@ LAN IP — update `EXPO_PUBLIC_API_BASE_URL` if your IP changes.
 
 ```bash
 yarn dev                      # in one terminal
-node scripts/smoke.mjs        # 163 end-to-end API assertions
+node scripts/smoke.mjs        # 208 end-to-end API assertions
 node scripts/ui-check.mjs     # drives the buyer and supplier UI in Chrome
 
 yarn admin                    # the admin console, in another terminal
@@ -104,8 +104,26 @@ side of the app's sign-up fork.
 
 `admin-check.mjs` covers the admin console, which is a separate app that
 proxies to the API — a broken proxy or a tab that throws shows up nowhere
-else. It opens every tab, checks the login gate refuses a wrong key, and
-checks that signing out really ends the session.
+else. It opens every tab, checks the login gate refuses a wrong key, edits a
+platform setting and confirms the API then serves the new value, opens the
+seller and customer drawers, and checks that signing out really ends the
+session.
+
+## Platform settings
+
+Everything in the console's Settings tab is read at runtime from
+`lib/settings.js`, so changes take effect on a running system without a
+redeploy. Precedence is **admin setting > environment variable > shipped
+default**, which means an operator can still pin a value in the environment
+for a deployment while an admin overrides it live.
+
+Adding a setting means adding one entry to `SETTINGS` in `lib/settings.js`:
+the console renders the right control from its type and bounds, and the API
+validates writes against the same definition. There is no second copy of the
+list in the UI.
+
+Secrets are deliberately not settings — anything that would let the console
+read or rotate an API key stays in the environment.
 
 ## Environment flags
 
